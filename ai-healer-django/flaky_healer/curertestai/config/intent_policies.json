@@ -1,0 +1,45 @@
+{
+  "add_to_cart": {
+    "blocked_selector_patterns": [
+      "(/cart|cart-icon|data-testid=[\"']cart-icon|bi-bag)",
+      "^a\\["
+    ],
+    "allowed_hint_patterns": [
+      "button",
+      "add",
+      "cart-plus"
+    ]
+  },
+  "checkout": {
+    "blocked_selector_patterns": [],
+    "allowed_hint_patterns": [
+      "checkout",
+      "proceed",
+      "pay",
+      "button",
+      "a\\["
+    ]
+  },
+  "payment": {
+    "blocked_selector_patterns": [
+      "cart-icon"
+    ],
+    "allowed_hint_patterns": [
+      "pay",
+      "payment",
+      "button"
+    ]
+  },
+  "view_details": {
+    "blocked_selector_patterns": [],
+    "allowed_hint_patterns": [
+      "view",
+      "details",
+      "a\\["
+    ]
+  },
+  "generic": {
+    "blocked_selector_patterns": [],
+    "allowed_hint_patterns": []
+  }
+}

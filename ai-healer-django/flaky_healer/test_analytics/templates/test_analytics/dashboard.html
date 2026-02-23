@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Test Analytics Dashboard</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --card: #ffffff;
+      --ink: #0f172a;
+      --muted: #475569;
+      --line: #dbe4f0;
+      --ok: #1d7f4f;
+      --bad: #b91c1c;
+      --warn: #b45309;
+      --blue: #1d4ed8;
+      --blue-soft: #dbeafe;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+      background: radial-gradient(circle at 20% 10%, #eef4ff, #f8fbff 42%, #f4f7fb 100%);
+      color: var(--ink);
+    }
+
+    .page {
+      width: min(1400px, 96vw);
+      margin: 18px auto 28px;
+    }
+
+    .top {
+      background: linear-gradient(135deg, #0b2548 0%, #153b76 45%, #1d4ed8 100%);
+      color: #fff;
+      padding: 18px;
+      border-radius: 14px;
+      box-shadow: 0 10px 24px rgba(2, 6, 23, 0.2);
+    }
+
+    .top h1 {
+      margin: 0;
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+    }
+
+    .top p {
+      margin: 6px 0 0;
+      color: #dbeafe;
+      font-size: 14px;
+    }
+
+    .filters {
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr auto;
+      gap: 10px;
+      align-items: end;
+    }
+
+    .field label {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 12px;
+      color: #dbeafe;
+    }
+
+    .field select,
+    .field input {
+      width: 100%;
+      border: 1px solid #89a8d8;
+      border-radius: 8px;
+      padding: 9px;
+      font-size: 13px;
+      background: #f8fbff;
+      color: #0f172a;
+    }
+
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 14px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 13px;
+    }
+
+    .btn-primary {
+      background: #f59e0b;
+      color: #111827;
+    }
+
+    .btn-outline {
+      background: transparent;
+      border: 1px solid #93c5fd;
+      color: #eff6ff;
+      margin-left: 8px;
+    }
+
+    .kpis {
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .kpi {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px;
+    }
+
+    .kpi .label {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 7px;
+    }
+
+    .kpi .value {
+      font-size: 24px;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .kpi.ok .value { color: var(--ok); }
+    .kpi.bad .value { color: var(--bad); }
+    .kpi.warn .value { color: var(--warn); }
+
+    .content {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: 1.1fr 1fr;
+      gap: 12px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px;
+    }
+
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: 16px;
+    }
+
+    .chart-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 68px;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .chart-label {
+      font-size: 13px;
+      margin-bottom: 4px;
+      color: #334155;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .bar-wrap {
+      background: #eef3fa;
+      border-radius: 999px;
+      overflow: hidden;
+      height: 12px;
+    }
+
+    .bar {
+      height: 100%;
+      border-radius: 999px;
+      transition: width 180ms ease;
+    }
+
+    .bar.blue { background: #3b82f6; }
+    .bar.red { background: #ef4444; }
+    .bar.green { background: #22c55e; }
+    .bar.orange { background: #f59e0b; }
+
+    .count {
+      text-align: right;
+      font-size: 12px;
+      color: #334155;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 8px 6px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      font-size: 12px;
+      color: var(--muted);
+      background: #f8fafc;
+      position: sticky;
+      top: 0;
+    }
+
+    .mono { font-family: Menlo, Monaco, monospace; font-size: 12px; }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.5;
+    }
+
+    .badge.bad { background: #fee2e2; color: #991b1b; }
+    .badge.ok { background: #dcfce7; color: #166534; }
+    .badge.warn { background: #fef3c7; color: #92400e; }
+
+    .data-box {
+      max-height: 350px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+
+    .details {
+      margin-top: 10px;
+      border-top: 1px solid var(--line);
+      padding-top: 10px;
+    }
+
+    .detail-kpis {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .detail-kpi {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fafc;
+      padding: 8px;
+    }
+
+    .detail-kpi .label {
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+
+    .detail-kpi .value {
+      font-size: 12px;
+      font-weight: 600;
+      word-break: break-word;
+    }
+
+    .timeline-table td, .timeline-table th {
+      font-size: 12px;
+      padding: 7px 6px;
+    }
+
+    .raw-toggle {
+      margin-top: 10px;
+      background: #eef2ff;
+      color: #1e3a8a;
+      border: 1px solid #c7d2fe;
+    }
+
+    .raw-json {
+      display: none;
+      margin-top: 8px;
+    }
+
+    .details pre {
+      background: #f8fafc;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      max-height: 220px;
+      overflow: auto;
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+
+    .muted { color: var(--muted); font-size: 12px; }
+
+    .empty {
+      padding: 12px;
+      background: #f8fafc;
+      border: 1px dashed #cbd5e1;
+      border-radius: 8px;
+      font-size: 13px;
+      color: #64748b;
+    }
+
+    @media (max-width: 1080px) {
+      .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .content { grid-template-columns: 1fr; }
+      .filters { grid-template-columns: 1fr 1fr; }
+      .detail-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 720px) {
+      .filters { grid-template-columns: 1fr; }
+      .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="top">
+      <h1>Playwright Failure Analytics Dashboard</h1>
+      <p>Track run quality, healing accuracy, and root causes from your saved test data.</p>
+
+      <form id="filterForm" class="filters">
+        <div class="field">
+          <label for="runId">Run</label>
+          <select id="runId" name="run_id">
+            <option value="">All Runs</option>
+            {% for run in runs %}
+              <option
+                value="{{ run.run_id }}"
+                data-build-id="{{ run.build_id|default:'' }}"
+                data-environment="{{ run.environment|default:'' }}"
+                {% if run.run_id == selected_run_id %}selected{% endif %}
+              >
+                {{ run.run_id }} ({{ run.environment|default:'NA' }})
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="buildId">Build</label>
+          <input id="buildId" name="build_id" value="{{ selected_build_id }}" placeholder="e.g. build-128" />
+        </div>
+
+        <div class="field">
+          <label for="environment">Environment</label>
+          <input id="environment" name="environment" value="{{ selected_environment }}" placeholder="e.g. local" />
+        </div>
+
+        <div>
+          <button type="submit" class="btn-primary">Apply</button>
+          <button type="button" class="btn-outline" id="clearBtn">Clear</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="kpis">
+      <article class="kpi"><div class="label">Total Tests</div><div class="value" id="kTotal">0</div></article>
+      <article class="kpi ok"><div class="label">Passed</div><div class="value" id="kPassed">0</div></article>
+      <article class="kpi bad"><div class="label">Failed</div><div class="value" id="kFailed">0</div></article>
+      <article class="kpi warn"><div class="label">Healing Attempted</div><div class="value" id="kAttempted">0</div></article>
+      <article class="kpi ok"><div class="label">Healing Success</div><div class="value" id="kHealSuccess">0</div></article>
+      <article class="kpi bad"><div class="label">False Positive</div><div class="value" id="kFalsePos">0</div></article>
+    </section>
+
+    <section class="content">
+      <article class="card">
+        <h2>Failure Category Breakdown</h2>
+        <div id="failureChart"></div>
+      </article>
+
+      <article class="card">
+        <h2>Healing Outcome Breakdown</h2>
+        <div id="healingChart"></div>
+      </article>
+
+      <article class="card">
+        <h2>History Assist Impact</h2>
+        <div class="muted" id="historyMeta"></div>
+        <div id="historyChart" style="margin-top:8px;"></div>
+      </article>
+
+      <article class="card">
+        <h2>Top Failed Selectors</h2>
+        <div id="selectorChart"></div>
+      </article>
+
+      <article class="card">
+        <h2>Recent Failures</h2>
+        <div class="data-box">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Test</th>
+                <th>Failure</th>
+                <th>Healing</th>
+                <th>Validation</th>
+                <th>UI Change</th>
+                <th>History Assist</th>
+                <th>History Hits</th>
+                <th>Confidence</th>
+                <th>Run</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="recentFailuresBody"></tbody>
+          </table>
+        </div>
+        <div class="details" id="detailPanel" style="display:none;">
+          <h2>Test Result Timeline</h2>
+          <div class="muted" id="detailMeta"></div>
+          <div class="detail-kpis">
+            <div class="detail-kpi"><div class="label">Failure Category</div><div class="value" id="dFailureCategory">NA</div></div>
+            <div class="detail-kpi"><div class="label">Healing Outcome</div><div class="value" id="dHealingOutcome">NA</div></div>
+            <div class="detail-kpi"><div class="label">Validation</div><div class="value" id="dValidationStatus">NA</div></div>
+            <div class="detail-kpi"><div class="label">UI Change</div><div class="value" id="dUiChange">NA</div></div>
+            <div class="detail-kpi"><div class="label">History / Hits</div><div class="value" id="dHistory">NA</div></div>
+          </div>
+          <div class="detail-kpis">
+            <div class="detail-kpi"><div class="label">Failed Selector</div><div class="value mono" id="dFailedSelector">NA</div></div>
+            <div class="detail-kpi"><div class="label">Healed Selector</div><div class="value mono" id="dHealedSelector">NA</div></div>
+            <div class="detail-kpi"><div class="label">Confidence</div><div class="value mono" id="dConfidence">NA</div></div>
+            <div class="detail-kpi"><div class="label">Root Cause</div><div class="value" id="dRootCause">NA</div></div>
+            <div class="detail-kpi"><div class="label">Error Summary</div><div class="value" id="dErrorSummary">NA</div></div>
+          </div>
+          <div class="data-box">
+            <table class="timeline-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Time</th>
+                  <th>Step</th>
+                  <th>Type</th>
+                  <th>Status</th>
+                  <th>Selector</th>
+                  <th>Healed Selector</th>
+                  <th>Message</th>
+                </tr>
+              </thead>
+              <tbody id="detailStepsBody"></tbody>
+            </table>
+          </div>
+          <button type="button" class="raw-toggle" id="rawToggleBtn">Show Raw JSON</button>
+          <pre id="detailJson" class="raw-json"></pre>
+        </div>
+      </article>
+    </section>
+  </div>
+
+  <script>
+    const summaryApiBase = "{% url 'test_analytics_summary' %}";
+    const detailApiTemplate = "{% url 'test_result_detail' 1 %}";
+
+    const filterForm = document.getElementById("filterForm");
+    const clearBtn = document.getElementById("clearBtn");
+    const runIdInput = document.getElementById("runId");
+    const buildIdInput = document.getElementById("buildId");
+    const environmentInput = document.getElementById("environment");
+
+    const kTotal = document.getElementById("kTotal");
+    const kPassed = document.getElementById("kPassed");
+    const kFailed = document.getElementById("kFailed");
+    const kAttempted = document.getElementById("kAttempted");
+    const kHealSuccess = document.getElementById("kHealSuccess");
+    const kFalsePos = document.getElementById("kFalsePos");
+
+    const failureChart = document.getElementById("failureChart");
+    const healingChart = document.getElementById("healingChart");
+    const selectorChart = document.getElementById("selectorChart");
+    const historyChart = document.getElementById("historyChart");
+    const historyMeta = document.getElementById("historyMeta");
+    const recentFailuresBody = document.getElementById("recentFailuresBody");
+    const detailPanel = document.getElementById("detailPanel");
+    const detailMeta = document.getElementById("detailMeta");
+    const detailStepsBody = document.getElementById("detailStepsBody");
+    const rawToggleBtn = document.getElementById("rawToggleBtn");
+    const detailJson = document.getElementById("detailJson");
+    const dFailureCategory = document.getElementById("dFailureCategory");
+    const dHealingOutcome = document.getElementById("dHealingOutcome");
+    const dValidationStatus = document.getElementById("dValidationStatus");
+    const dUiChange = document.getElementById("dUiChange");
+    const dHistory = document.getElementById("dHistory");
+    const dFailedSelector = document.getElementById("dFailedSelector");
+    const dHealedSelector = document.getElementById("dHealedSelector");
+    const dConfidence = document.getElementById("dConfidence");
+    const dRootCause = document.getElementById("dRootCause");
+    const dErrorSummary = document.getElementById("dErrorSummary");
+
+    function escaped(value) {
+      return String(value ?? "").replace(/[&<>'"]/g, (char) => {
+        const map = { "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" };
+        return map[char] || char;
+      });
+    }
+
+    function buildSummaryUrl() {
+      const params = new URLSearchParams();
+      if (runIdInput.value.trim()) params.set("run_id", runIdInput.value.trim());
+      if (buildIdInput.value.trim()) params.set("build_id", buildIdInput.value.trim());
+      if (environmentInput.value.trim()) params.set("environment", environmentInput.value.trim());
+
+      const query = params.toString();
+      return query ? `${summaryApiBase}?${query}` : summaryApiBase;
+    }
+
+    function renderBars(container, rows, keyLabel, keyCount, color) {
+      if (!rows || rows.length === 0) {
+        container.innerHTML = '<div class="empty">No data available for current filters.</div>';
+        return;
+      }
+
+      const max = Math.max(...rows.map((r) => Number(r[keyCount] || 0)), 1);
+      container.innerHTML = rows.map((row) => {
+        const label = row[keyLabel] || "UNKNOWN";
+        const count = Number(row[keyCount] || 0);
+        const width = Math.max(4, Math.round((count / max) * 100));
+
+        return `
+          <div class="chart-row">
+            <div>
+              <div class="chart-label" title="${escaped(label)}">${escaped(label)}</div>
+              <div class="bar-wrap">
+                <div class="bar ${color}" style="width:${width}%;"></div>
+              </div>
+            </div>
+            <div class="count">${count}</div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function renderRecentFailures(items) {
+      if (!items || items.length === 0) {
+        recentFailuresBody.innerHTML = '<tr><td colspan="11" class="muted">No failures in selected scope.</td></tr>';
+        return;
+      }
+
+      recentFailuresBody.innerHTML = items.map((item) => {
+        const category = item.failure_category || "UNKNOWN";
+        const healing = item.healing_outcome || "NOT_ATTEMPTED";
+        const validation = item.validation_status || "NA";
+        const uiChange = item.ui_change_level || "UNKNOWN";
+        const historyAssist = item.history_assisted ? "YES" : "NO";
+        const historyHits = Number(item.history_hits || 0);
+        const confidence = item.healing_confidence != null ? Number(item.healing_confidence).toFixed(4) : "NA";
+        return `
+          <tr>
+            <td class="mono">${item.id}</td>
+            <td>${escaped(item.test_name || "")}</td>
+            <td><span class="badge bad">${escaped(category)}</span></td>
+            <td><span class="badge warn">${escaped(healing)}</span></td>
+            <td><span class="badge ${validation === "VALID" ? "ok" : "warn"}">${escaped(validation)}</span></td>
+            <td class="mono">${escaped(uiChange)}</td>
+            <td class="mono">${historyAssist}</td>
+            <td class="mono">${historyHits}</td>
+            <td class="mono">${confidence}</td>
+            <td class="mono">${escaped(item.test_run__run_id || "")}</td>
+            <td><button type="button" class="btn-primary" data-id="${item.id}">View</button></td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    function renderHealingSummary(summary) {
+      const rows = [
+        { name: "Attempted", count: summary.attempted || 0 },
+        { name: "Success", count: summary.success || 0 },
+        { name: "Failed", count: summary.failed || 0 },
+        { name: "Not Attempted", count: summary.not_attempted || 0 },
+        { name: "False Positive", count: summary.false_positive || 0 },
+      ];
+      renderBars(healingChart, rows, "name", "count", "orange");
+    }
+
+    function renderHistorySummary(summary) {
+      if (!summary) {
+        historyMeta.textContent = "No history data available.";
+        historyChart.innerHTML = '<div class="empty">No data available for current filters.</div>';
+        return;
+      }
+
+      const assistedRate = Number(summary.assisted_success_rate || 0).toFixed(2);
+      const nonAssistedRate = Number(summary.non_assisted_success_rate || 0).toFixed(2);
+      historyMeta.textContent =
+        `Assisted: ${summary.assisted_success || 0}/${summary.assisted_attempts || 0} (${assistedRate}%) | ` +
+        `Non-assisted: ${summary.non_assisted_success || 0}/${summary.non_assisted_attempts || 0} (${nonAssistedRate}%)`;
+
+      const bucketRows = (summary.buckets || []).map((b) => ({
+        name: `hits=${b.history_bucket}`,
+        count: Number(b.success_rate || 0),
+      }));
+
+      if (bucketRows.length === 0) {
+        historyChart.innerHTML = '<div class="empty">No healing-attempt data for history buckets.</div>';
+        return;
+      }
+
+      renderBars(historyChart, bucketRows, "name", "count", "green");
+    }
+
+    function syncFiltersToUrl() {
+      const params = new URLSearchParams();
+      if (runIdInput.value.trim()) params.set("run_id", runIdInput.value.trim());
+      if (buildIdInput.value.trim()) params.set("build_id", buildIdInput.value.trim());
+      if (environmentInput.value.trim()) params.set("environment", environmentInput.value.trim());
+
+      const next = params.toString() ? `${window.location.pathname}?${params.toString()}` : window.location.pathname;
+      window.history.replaceState({}, "", next);
+    }
+
+    function shortError(errorMessage) {
+      const firstLine = String(errorMessage || "").split("\n")[0] || "";
+      return firstLine.length > 140 ? `${firstLine.slice(0, 140)}...` : firstLine || "NA";
+    }
+
+    function renderStepTimeline(stepEvents) {
+      const events = Array.isArray(stepEvents) ? stepEvents : [];
+      if (events.length === 0) {
+        detailStepsBody.innerHTML = '<tr><td colspan="8" class="muted">No step timeline found for this test result.</td></tr>';
+        return;
+      }
+
+      detailStepsBody.innerHTML = events.map((step, index) => {
+        const status = step.status || "UNKNOWN";
+        const badgeClass = status === "PASSED" || status === "HEALED" ? "ok" : status === "FAILED" ? "bad" : "warn";
+        const when = step.timestamp ? new Date(step.timestamp).toLocaleTimeString() : "NA";
+        return `
+          <tr>
+            <td class="mono">${index + 1}</td>
+            <td class="mono">${escaped(when)}</td>
+            <td>${escaped(step.step_name || "NA")}</td>
+            <td>${escaped(step.step_type || "NA")}</td>
+            <td><span class="badge ${badgeClass}">${escaped(status)}</span></td>
+            <td class="mono">${escaped(step.failed_selector || "NA")}</td>
+            <td class="mono">${escaped(step.healed_selector || "NA")}</td>
+            <td>${escaped(step.message || "NA")}</td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    async function loadSummary() {
+      detailPanel.style.display = "none";
+
+      try {
+        const resp = await fetch(buildSummaryUrl());
+        if (!resp.ok) throw new Error(`Summary API failed: ${resp.status}`);
+
+        const data = await resp.json();
+        const totals = data.totals || {};
+        const healing = data.healing_summary || {};
+
+        kTotal.textContent = totals.total_tests ?? 0;
+        kPassed.textContent = totals.passed ?? 0;
+        kFailed.textContent = totals.failed ?? 0;
+        kAttempted.textContent = healing.attempted ?? 0;
+        kHealSuccess.textContent = healing.success ?? 0;
+        kFalsePos.textContent = healing.false_positive ?? 0;
+
+        renderBars(failureChart, data.failure_breakdown || [], "failure_category", "count", "red");
+        renderHealingSummary(healing);
+        renderHistorySummary(data.history_summary || {});
+        renderBars(selectorChart, data.top_failed_selectors || [], "failed_selector", "count", "blue");
+        renderRecentFailures(data.recent_failures || []);
+
+        syncFiltersToUrl();
+      } catch (error) {
+        const html = `<div class="empty">Failed to load summary: ${escaped(error.message)}</div>`;
+        failureChart.innerHTML = html;
+        healingChart.innerHTML = html;
+        historyChart.innerHTML = html;
+        historyMeta.textContent = "Failed to load history metrics.";
+        selectorChart.innerHTML = html;
+        recentFailuresBody.innerHTML = '<tr><td colspan="11" class="muted">Could not load failures.</td></tr>';
+      }
+    }
+
+    async function loadDetail(id) {
+      try {
+        const detailUrl = detailApiTemplate.replace("/1/", `/${id}/`);
+        const resp = await fetch(detailUrl);
+        if (!resp.ok) throw new Error(`Detail API failed: ${resp.status}`);
+
+        const detail = await resp.json();
+        detailPanel.style.display = "block";
+        detailMeta.textContent = `${detail.test_name || ""} | ${detail.status || ""} | run=${detail.run_id || ""}`;
+        dFailureCategory.textContent = detail.failure_category || "NA";
+        dHealingOutcome.textContent = detail.healing_outcome || "NA";
+        dValidationStatus.textContent = detail.validation_status || "NA";
+        dUiChange.textContent = detail.ui_change_level || "UNKNOWN";
+        dHistory.textContent = `${detail.history_assisted ? "ASSISTED" : "NOT_ASSISTED"} | hits=${detail.history_hits ?? 0}`;
+        dFailedSelector.textContent = detail.failed_selector || "NA";
+        dHealedSelector.textContent = detail.healed_selector || "NA";
+        dConfidence.textContent = detail.healing_confidence != null ? Number(detail.healing_confidence).toFixed(4) : "NA";
+        dRootCause.textContent = detail.root_cause || "NA";
+        dErrorSummary.textContent = shortError(detail.error_message);
+        renderStepTimeline(detail.step_events);
+
+        detailJson.style.display = "none";
+        rawToggleBtn.textContent = "Show Raw JSON";
+        detailJson.textContent = JSON.stringify(
+          {
+            failure_category: detail.failure_category,
+            healing_outcome: detail.healing_outcome,
+            validation_status: detail.validation_status,
+            ui_change_level: detail.ui_change_level,
+            history_assisted: detail.history_assisted,
+            history_hits: detail.history_hits,
+            healing_confidence: detail.healing_confidence,
+            failed_selector: detail.failed_selector,
+            healed_selector: detail.healed_selector,
+            root_cause: detail.root_cause,
+            step_events: detail.step_events,
+            error_message: detail.error_message,
+          },
+          null,
+          2
+        );
+      } catch (error) {
+        detailPanel.style.display = "block";
+        detailMeta.textContent = "Error";
+        detailStepsBody.innerHTML = '<tr><td colspan="8" class="muted">Could not load timeline.</td></tr>';
+        detailJson.style.display = "block";
+        rawToggleBtn.textContent = "Hide Raw JSON";
+        detailJson.textContent = `Could not load detail: ${error.message}`;
+      }
+    }
+
+    filterForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      loadSummary();
+    });
+
+    clearBtn.addEventListener("click", () => {
+      runIdInput.value = "";
+      buildIdInput.value = "";
+      environmentInput.value = "";
+      loadSummary();
+    });
+
+    runIdInput.addEventListener("change", () => {
+      const selected = runIdInput.options[runIdInput.selectedIndex];
+      if (!selected) return;
+
+      if (!buildIdInput.value.trim() && selected.dataset.buildId) {
+        buildIdInput.value = selected.dataset.buildId;
+      }
+      if (!environmentInput.value.trim() && selected.dataset.environment) {
+        environmentInput.value = selected.dataset.environment;
+      }
+    });
+
+    recentFailuresBody.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLButtonElement)) return;
+      const id = target.dataset.id;
+      if (!id) return;
+      loadDetail(id);
+    });
+
+    rawToggleBtn.addEventListener("click", () => {
+      const isHidden = detailJson.style.display === "none" || !detailJson.style.display;
+      detailJson.style.display = isHidden ? "block" : "none";
+      rawToggleBtn.textContent = isHidden ? "Hide Raw JSON" : "Show Raw JSON";
+    });
+
+    loadSummary();
+  </script>
+</body>
+</html>

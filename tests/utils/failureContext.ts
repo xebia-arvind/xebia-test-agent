@@ -1,0 +1,75 @@
+import type { TestInfo } from "@playwright/test";
+
+export type StepEvent = {
+  step_name: string;
+  step_type: "action" | "assertion" | "navigation";
+  status: "PASSED" | "FAILED" | "HEALED";
+  failed_selector?: string;
+  healed_selector?: string;
+  healing_confidence?: number | null;
+  message?: string;
+  timestamp: string;
+};
+
+type FailureContext = {
+  failedSelector?: string;
+  failureReason?: string;
+  selectorType?: string;
+  pageUrl?: string;
+  healingAttempted?: boolean;
+  healingOutcome?: "NOT_ATTEMPTED" | "SUCCESS" | "FAILED";
+  healedSelector?: string;
+  healingConfidence?: number | null;
+  validationStatus?: string;
+  uiChangeLevel?: string;
+  historyAssisted?: boolean;
+  historyHits?: number;
+  rootCause?: string;
+  stepEvents?: StepEvent[];
+};
+
+const contextByTestId = new Map<string, FailureContext>();
+
+export function setFailureContext(testInfo: TestInfo, context: FailureContext) {
+  const previous = contextByTestId.get(testInfo.testId) || {};
+  contextByTestId.set(testInfo.testId, {
+    ...previous,
+    ...context,
+    stepEvents: context.stepEvents ?? previous.stepEvents ?? [],
+  });
+}
+
+export function addStepEvent(testInfo: TestInfo, event: Omit<StepEvent, "timestamp">) {
+  const previous = contextByTestId.get(testInfo.testId) || {};
+  const existingEvents = previous.stepEvents || [];
+  contextByTestId.set(testInfo.testId, {
+    ...previous,
+    stepEvents: [
+      ...existingEvents,
+      {
+        ...event,
+        timestamp: new Date().toISOString(),
+      },
+    ],
+  });
+}
+
+export function getFailureContext(testInfo: TestInfo): FailureContext | undefined {
+  return contextByTestId.get(testInfo.testId);
+}
+
+export function clearFailureContext(testInfo: TestInfo) {
+  contextByTestId.delete(testInfo.testId);
+}
+
+export function parseFailureFromError(errorMessage?: string): FailureContext {
+  if (!errorMessage) return {};
+
+  const locatorMatch = errorMessage.match(/Locator:\s*([^\n]+)/i);
+  const failedSelector = locatorMatch?.[1]?.trim();
+
+  return {
+    failedSelector,
+    failureReason: errorMessage.split("\n")[0]?.trim() || "assertion_failed",
+  };
+}
