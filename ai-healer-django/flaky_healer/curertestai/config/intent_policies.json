@@ -38,6 +38,22 @@
       "a\\["
     ]
   },
+  "wishlist": {
+    "blocked_selector_patterns": [
+      "(/cart|cart-icon|checkout|payment)",
+      "(add to cart|proceed to checkout|pay now)"
+    ],
+    "allowed_hint_patterns": [
+      "wishlist",
+      "wish",
+      "favorite",
+      "favourite",
+      "heart",
+      "save",
+      "button",
+      "a\\["
+    ]
+  },
   "generic": {
     "blocked_selector_patterns": [],
     "allowed_hint_patterns": []

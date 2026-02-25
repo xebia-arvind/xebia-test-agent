@@ -13,6 +13,7 @@ class HealRequestSerializer(serializers.Serializer):
     screenshot_path = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     selector_type = serializers.CharField(max_length=20, default="css")
     intent_key = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    skip_cache = serializers.BooleanField(required=False, default=False)
     
     def validate(self, attrs):
         """Validate that at least one of html or semantic_dom is provided"""
@@ -46,6 +47,9 @@ class DebugInfoSerializer(serializers.Serializer):
     validation_reason = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     history_assisted = serializers.BooleanField(required=False)
     history_hits = serializers.IntegerField(required=False)
+    retrieval_assisted = serializers.BooleanField(required=False)
+    retrieval_hits = serializers.IntegerField(required=False)
+    retrieved_versions = serializers.JSONField(required=False)
     dom_fingerprint = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     ui_change_level = serializers.CharField(required=False, allow_null=True, allow_blank=True)
 
@@ -61,6 +65,9 @@ class HealResponseSerializer(serializers.Serializer):
     llm_used = serializers.BooleanField(required=False)
     history_assisted = serializers.BooleanField(required=False)
     history_hits = serializers.IntegerField(required=False)
+    retrieval_assisted = serializers.BooleanField(required=False)
+    retrieval_hits = serializers.IntegerField(required=False)
+    retrieved_versions = serializers.JSONField(required=False)
     dom_fingerprint = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     ui_change_level = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     candidates = CandidateSerializer(many=True)

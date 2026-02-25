@@ -17,8 +17,20 @@ export interface HealerDebug {
     validation_reason?: string;
     history_assisted?: boolean;
     history_hits?: number;
+    retrieval_assisted?: boolean;
+    retrieval_hits?: number;
+    retrieved_versions?: Array<{
+        snapshot_id: number;
+        similarity: number;
+        created_on: string;
+        healed_selector: string;
+        dom_fingerprint?: string;
+        source_request_id?: number;
+    }>;
     dom_fingerprint?: string;
     ui_change_level?: "UNKNOWN" | "UNCHANGED" | "MINOR_CHANGE" | "MAJOR_CHANGE" | "ELEMENT_REMOVED" | string;
+    cache_hit?: boolean;
+    cache_source_id?: number;
 }
 
 export interface HealResponse {
@@ -29,6 +41,16 @@ export interface HealResponse {
     llm_used?: boolean;
     history_assisted?: boolean;
     history_hits?: number;
+    retrieval_assisted?: boolean;
+    retrieval_hits?: number;
+    retrieved_versions?: Array<{
+        snapshot_id: number;
+        similarity: number;
+        created_on: string;
+        healed_selector: string;
+        dom_fingerprint?: string;
+        source_request_id?: number;
+    }>;
     dom_fingerprint?: string;
     ui_change_level?: "UNKNOWN" | "UNCHANGED" | "MINOR_CHANGE" | "MAJOR_CHANGE" | "ELEMENT_REMOVED" | string;
     candidates: HealerCandidate[];

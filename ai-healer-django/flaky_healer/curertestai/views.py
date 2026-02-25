@@ -1,6 +1,9 @@
 import time
 import uuid
 import logging
+import os
+import re
+from datetime import timedelta
 from typing import Dict, Any, Optional, List
 
 from rest_framework.views import APIView
@@ -14,7 +17,7 @@ from curertestai.serializers import (
     HealResponseSerializer,
     BatchHealResponseSerializer
 )
-from curertestai.models import HealerRequest, HealerRequestBatch, SuggestedSelector
+from curertestai.models import HealerRequest, HealerRequestBatch, SuggestedSelector, DomSnapshot
 from curertestai.dom_extractor import DOMExtractor
 from curertestai.matching_engine import MatchingEngine
 from curertestai.validation_engine import select_validated_candidate
@@ -25,6 +28,7 @@ from curertestai.fingerprint import (
 )
 from clients.models import Clients
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 User = get_user_model()
 
 # Setup logger
@@ -61,12 +65,16 @@ class HealAPIView(APIView):
         validated_data = serializer.validated_data
         
         try:
-            # Process heal request
-            result = self._process_heal_request(
-                validated_data,
-                request_id,
-                start_time
-            )
+            cached_result = self._resolve_cached_selector(validated_data, start_time)
+            if cached_result:
+                result = cached_result
+            else:
+                # Process heal request
+                result = self._process_heal_request(
+                    validated_data,
+                    request_id,
+                    start_time
+                )
             
             # Save to database (batch_instance=None for single requests)
             healer_request = self._save_heal_request(validated_data, result, start_time, batch_instance=None,user=user,client=client)
@@ -96,10 +104,135 @@ class HealAPIView(APIView):
                 f"error={str(e)}",
                 exc_info=True
             )
-            return Response(
-                {"error": "Healing failed", "detail": str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            # Fail-safe response so test layer can handle it as NO_SAFE_MATCH
+            # instead of hard failing on HTTP 500.
+            safe_response = {
+                "id": 0,
+                "batch_id": 0,
+                "message": "Healer internal failure handled safely",
+                "chosen": None,
+                "validation_status": "NO_SAFE_MATCH",
+                "validation_reason": f"Healer internal error: {str(e)[:200]}",
+                "llm_used": False,
+                "history_assisted": False,
+                "history_hits": 0,
+                "retrieval_assisted": False,
+                "retrieval_hits": 0,
+                "retrieved_versions": [],
+                "dom_fingerprint": None,
+                "ui_change_level": "UNKNOWN",
+                "candidates": [],
+                "debug": {
+                    "total_candidates": 0,
+                    "engine": "safe_fallback",
+                    "processing_time_ms": round((time.time() - start_time) * 1000, 2),
+                    "vision_analyzed": False,
+                    "validation_status": "NO_SAFE_MATCH",
+                    "validation_reason": "Healer internal exception",
+                    "history_assisted": False,
+                    "history_hits": 0,
+                    "retrieval_assisted": False,
+                    "retrieval_hits": 0,
+                    "retrieved_versions": [],
+                    "error": str(e),
+                },
+            }
+            return Response(safe_response, status=status.HTTP_200_OK)
+
+    def _resolve_cached_selector(
+        self,
+        validated_data: Dict[str, Any],
+        start_time: float,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Fast-path: reuse a previously validated successful selector for same failure context.
+        Falls back to full healing pipeline if no safe cache hit exists.
+        """
+        use_cache = os.getenv("USE_HEALING_CACHE", "true").lower() == "true"
+        skip_cache = bool(validated_data.get("skip_cache", False))
+        if not use_cache or skip_cache:
+            return None
+
+        page_url = validated_data.get("page_url", "") or ""
+        use_of_selector = validated_data.get("use_of_selector", "") or ""
+        failed_selector = validated_data.get("failed_selector", "") or ""
+        intent_key = validated_data.get("intent_key", "") or ""
+
+        if not (page_url and use_of_selector and failed_selector):
+            return None
+
+        min_confidence = float(os.getenv("HEALING_CACHE_MIN_CONFIDENCE", "0.30"))
+        max_age_days = int(os.getenv("HEALING_CACHE_MAX_AGE_DAYS", "14"))
+        cutoff = timezone.now() - timedelta(days=max_age_days)
+
+        cache_qs = (
+            HealerRequest.objects.filter(
+                url=page_url,
+                use_of_selector=use_of_selector,
+                failed_selector=failed_selector,
+                success=True,
+                validation_status="VALID",
+                created_on__gte=cutoff,
+                confidence__gte=min_confidence,
             )
+            .exclude(healed_selector__isnull=True)
+            .exclude(healed_selector__exact="")
+        )
+
+        if intent_key:
+            cache_qs = cache_qs.filter(intent_key=intent_key)
+
+        cached = cache_qs.order_by("-created_on").first()
+        if not cached:
+            return None
+
+        processing_time = round((time.time() - start_time) * 1000, 2)
+        chosen = cached.healed_selector
+        confidence = float(cached.confidence or 0.0)
+
+        logger.info(
+            "Cache hit for healer request | failed_selector=%s | chosen=%s | source_id=%s",
+            failed_selector,
+            chosen,
+            cached.id,
+        )
+
+        return {
+            "message": "Resolved from history cache",
+            "chosen": chosen,
+            "validation_status": "VALID",
+            "validation_reason": "Reused previously successful validated selector",
+            "llm_used": False,
+            "history_assisted": True,
+            "history_hits": 1,
+            "dom_fingerprint": cached.dom_fingerprint,
+            "ui_change_level": cached.ui_change_level or "UNKNOWN",
+            "candidates": [
+                {
+                    "selector": chosen,
+                    "score": round(confidence, 4),
+                    "base_score": round(confidence, 4),
+                    "attribute_score": 0.0,
+                    "tag": "",
+                    "text": "",
+                    "xpath": "",
+                }
+            ],
+            "debug": {
+                "total_candidates": 1,
+                "engine": "history_cache",
+                "processing_time_ms": processing_time,
+                "vision_analyzed": False,
+                "validation_status": "VALID",
+                "validation_reason": "Cache hit",
+                "history_assisted": True,
+                "history_hits": 1,
+                "dom_fingerprint": cached.dom_fingerprint,
+                "ui_change_level": cached.ui_change_level or "UNKNOWN",
+                "cache_hit": True,
+                "cache_source_id": cached.id,
+            },
+        }
     
     def _process_heal_request(
         self,
@@ -124,17 +257,29 @@ class HealAPIView(APIView):
 
         current_elements = dom_data.get("elements", [])
         dom_fingerprint = generate_dom_fingerprint(current_elements)
+        current_signature_tokens = sorted(build_dom_signature_tokens(current_elements))[:500]
         ui_change_level = self._detect_ui_change_level(validated_data, current_elements)
 
-        # Initialize matching engine
-        engine = MatchingEngine(current_elements)
-        
-        # Rank and find best selectors
-        results = engine.rank(
-            validated_data['failed_selector'],
-            validated_data['use_of_selector'],
-            top_k=5
-        )
+        # Initialize matching engine and rank candidates.
+        # If ranking fails, continue with empty candidates so validation
+        # returns NO_SAFE_MATCH instead of raising 500.
+        engine_error = None
+        try:
+            engine = MatchingEngine(current_elements)
+            results = engine.rank(
+                validated_data['failed_selector'],
+                validated_data['use_of_selector'],
+                top_k=5
+            )
+        except Exception as exc:
+            logger.warning(
+                "Matching engine failed | request_id=%s | selector=%s | error=%s",
+                request_id,
+                validated_data.get("failed_selector"),
+                str(exc),
+            )
+            engine_error = str(exc)
+            results = []
         
         # Calculate processing time
         processing_time = (time.time() - start_time) * 1000
@@ -147,9 +292,11 @@ class HealAPIView(APIView):
             page_url=validated_data.get("page_url", ""),
             intent_key=validated_data.get("intent_key", ""),
             dom_fingerprint=dom_fingerprint,
+            current_signature_tokens=current_signature_tokens,
             ui_change_level=ui_change_level,
             request_id=request_id,
-            processing_time=processing_time
+            processing_time=processing_time,
+            engine_error=engine_error,
         )
         
         return response
@@ -162,9 +309,11 @@ class HealAPIView(APIView):
         page_url: str,
         intent_key: str,
         dom_fingerprint: str,
+        current_signature_tokens: List[str],
         ui_change_level: str,
         request_id: str,
         processing_time: float,
+        engine_error: Optional[str] = None,
         vision_analyzed: bool = False,
         vision_analysis: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
@@ -194,6 +343,8 @@ class HealAPIView(APIView):
         if vision_analyzed and vision_analysis:
             debug_info["vision_model"] = vision_analysis.get("model_used")
             debug_info["vision_success"] = vision_analysis.get("success", False)
+        if engine_error:
+            debug_info["engine_error"] = engine_error
 
         selection = select_validated_candidate(
             candidates=candidates,
@@ -201,11 +352,16 @@ class HealAPIView(APIView):
             use_of_selector=use_of_selector,
             page_url=page_url,
             intent_key=intent_key,
+            current_signature_tokens=current_signature_tokens,
+            ui_change_level=ui_change_level,
         )
         debug_info["validation_status"] = selection["validation_status"]
         debug_info["validation_reason"] = selection["validation_reason"]
         debug_info["history_assisted"] = selection["history_assisted"]
         debug_info["history_hits"] = selection["history_hits"]
+        debug_info["retrieval_assisted"] = selection.get("retrieval_assisted", False)
+        debug_info["retrieval_hits"] = selection.get("retrieval_hits", 0)
+        debug_info["retrieved_versions"] = selection.get("retrieved_versions", [])
         debug_info["dom_fingerprint"] = dom_fingerprint
         debug_info["ui_change_level"] = ui_change_level
 
@@ -217,6 +373,10 @@ class HealAPIView(APIView):
             "llm_used": selection["llm_used"],
             "history_assisted": selection["history_assisted"],
             "history_hits": selection["history_hits"],
+            "retrieval_assisted": selection.get("retrieval_assisted", False),
+            "retrieval_hits": selection.get("retrieval_hits", 0),
+            "retrieved_versions": selection.get("retrieved_versions", []),
+            "signature_tokens": current_signature_tokens,
             "dom_fingerprint": dom_fingerprint,
             "ui_change_level": ui_change_level,
             "candidates": candidates,
@@ -276,8 +436,48 @@ class HealAPIView(APIView):
                 text=candidate.get('text', ''),
                 xpath=candidate.get('xpath', '')
             )
+
+        self._save_dom_snapshot(validated_data, result, healer_request)
         
         return healer_request
+
+    def _save_dom_snapshot(
+        self,
+        validated_data: Dict[str, Any],
+        result: Dict[str, Any],
+        healer_request: HealerRequest,
+    ) -> None:
+        """
+        Store versioned DOM snapshot for future retrieval-based healing.
+        """
+        page_url = validated_data.get("page_url", "") or ""
+        use_of_selector = validated_data.get("use_of_selector", "") or ""
+        if not page_url or not use_of_selector:
+            return
+
+        html = (validated_data.get("html", "") or "")
+        html_excerpt = html[:6000] if html else ""
+        signature_tokens = result.get("signature_tokens") or []
+        if not signature_tokens:
+            return
+
+        try:
+            DomSnapshot.objects.create(
+                page_url=page_url,
+                use_of_selector=use_of_selector,
+                intent_key=validated_data.get("intent_key", "") or "",
+                failed_selector=validated_data.get("failed_selector", "") or "",
+                healed_selector=result.get("chosen") or "",
+                dom_fingerprint=result.get("dom_fingerprint"),
+                signature_tokens=signature_tokens,
+                html_excerpt=html_excerpt,
+                success=bool(result.get("chosen")),
+                validation_status=result.get("validation_status"),
+                confidence=float((result.get("candidates") or [{}])[0].get("score", 0.0) if result.get("candidates") else 0.0),
+                source_request=healer_request,
+            )
+        except Exception as exc:
+            logger.warning("DomSnapshot save skipped due to error: %s", str(exc))
 
     def _detect_ui_change_level(
         self,
@@ -300,7 +500,12 @@ class HealAPIView(APIView):
         if not previous:
             previous = base_query.order_by("-created_on").first()
 
+        failed_selector = validated_data.get("failed_selector", "") or ""
+        hints = self._extract_selector_hints(failed_selector, use_of_selector)
         if not previous:
+            # If selector hints are clearly missing in current DOM, don't keep UNKNOWN.
+            if hints and not self._selector_hint_exists(current_elements, hints):
+                return "MINOR_CHANGE"
             return "UNKNOWN"
 
         try:
@@ -309,6 +514,12 @@ class HealAPIView(APIView):
             previous_elements = previous_dom.get("elements", [])
         except Exception:
             return "UNKNOWN"
+
+        if hints:
+            had_before = self._selector_hint_exists(previous_elements, hints)
+            exists_now = self._selector_hint_exists(current_elements, hints)
+            if had_before and not exists_now:
+                return "ELEMENT_REMOVED"
 
         prev_tokens = build_dom_signature_tokens(previous_elements)
         curr_tokens = build_dom_signature_tokens(current_elements)
@@ -319,14 +530,84 @@ class HealAPIView(APIView):
         if similarity >= 0.70:
             return "MINOR_CHANGE"
 
-        intent_text = (intent_key or validated_data.get("use_of_selector", "") or "").lower()
-        if "add_to_cart" in intent_text or ("add" in intent_text and "cart" in intent_text):
-            prev_has_add_cart = any("text:add to cart" in t or "text:add" in t for t in prev_tokens)
-            curr_has_add_cart = any("text:add to cart" in t or "text:add" in t for t in curr_tokens)
-            if prev_has_add_cart and not curr_has_add_cart:
-                return "ELEMENT_REMOVED"
-
         return "MAJOR_CHANGE"
+
+    def _extract_selector_hints(self, failed_selector: str, use_of_selector: str) -> List[str]:
+        """
+        Build lightweight hints from selector + step intent text.
+        Example:
+          a:has-text("View Details") -> ["view details"]
+          #buy-btn -> ["buy-btn"]
+          [data-testid="cart-icon"] -> ["cart-icon"]
+        """
+        hints: List[str] = []
+        sel = (failed_selector or "").strip().lower()
+        use_text = (use_of_selector or "").strip().lower()
+
+        text_match = re.search(r'has-text\\("([^"]+)"\\)', sel)
+        if text_match:
+            hints.append(text_match.group(1).strip())
+        text_match_single = re.search(r"has-text\\('([^']+)'\\)", sel)
+        if text_match_single:
+            hints.append(text_match_single.group(1).strip())
+
+        id_match = re.search(r"#([a-zA-Z0-9_-]+)", sel)
+        if id_match:
+            hints.append(id_match.group(1).strip().lower())
+
+        testid_match = re.search(r'data-testid\\s*=\\s*["\\\']([^"\\\']+)["\\\']', sel)
+        if testid_match:
+            hints.append(testid_match.group(1).strip().lower())
+
+        attr_literal_matches = re.findall(
+            r'(?:id|name|role|aria-label|data-testid)\\s*=\\s*["\\\']([^"\\\']+)["\\\']',
+            sel
+        )
+        for val in attr_literal_matches[:3]:
+            hints.append(val.strip().lower())
+
+        class_matches = re.findall(r"\\.([a-zA-Z0-9_-]+)", sel)
+        for klass in class_matches[:2]:
+            hints.append(klass.strip().lower())
+
+        # Generic fallback: use meaningful words from step intent text.
+        generic_words = [
+            token for token in re.split(r"[^a-z0-9]+", use_text)
+            if token and len(token) >= 4 and token not in {"click", "button", "first", "with", "self", "healing"}
+        ]
+        hints.extend(generic_words[:4])
+
+        # De-duplicate and keep meaningful hints only.
+        normalized = []
+        seen = set()
+        for h in hints:
+            val = " ".join(h.split()).strip().lower()
+            if len(val) < 3 or val in seen:
+                continue
+            normalized.append(val)
+            seen.add(val)
+        return normalized[:5]
+
+    def _selector_hint_exists(self, elements: List[Dict[str, Any]], hints: List[str]) -> bool:
+        if not hints:
+            return False
+
+        for el in elements[:1000]:
+            attrs = el.get("attributes") or {}
+            blob_parts = [
+                str(el.get("text") or ""),
+                str(el.get("accessible_name") or ""),
+                str(el.get("selector") or ""),
+                str(attrs.get("id") or ""),
+                str(attrs.get("class") or ""),
+                str(attrs.get("data-testid") or ""),
+                str(attrs.get("aria-label") or ""),
+                str(attrs.get("name") or ""),
+            ]
+            blob = " ".join(blob_parts).lower()
+            if any(h in blob for h in hints):
+                return True
+        return False
 
 
 class BatchHealAPIView(APIView):

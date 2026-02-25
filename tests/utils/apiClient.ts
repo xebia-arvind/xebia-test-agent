@@ -36,6 +36,13 @@ export async function authenticatedPost<T>(
             });
             return retryResponse;
         }
+        if (err?.response) {
+            const statusCode = err.response.status;
+            const body = typeof err.response.data === "string"
+                ? err.response.data
+                : JSON.stringify(err.response.data);
+            throw new Error(`Healer API error ${statusCode}: ${body}`);
+        }
         throw err;
     }
 }

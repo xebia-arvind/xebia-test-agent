@@ -58,3 +58,30 @@ class SuggestedSelector(Common):
     
     def __str__(self):
             return self.selector
+
+
+class DomSnapshot(Common):
+    """
+    Versioned snapshot used for historical retrieval during healing.
+    """
+    page_url = models.URLField(db_index=True)
+    use_of_selector = models.TextField()
+    intent_key = models.CharField(max_length=64, null=True, blank=True, db_index=True)
+    failed_selector = models.TextField(null=True, blank=True)
+    healed_selector = models.TextField(null=True, blank=True)
+    dom_fingerprint = models.CharField(max_length=64, null=True, blank=True, db_index=True)
+    signature_tokens = models.JSONField(null=True, blank=True)
+    html_excerpt = models.TextField(null=True, blank=True)
+    success = models.BooleanField(default=False)
+    validation_status = models.CharField(max_length=32, null=True, blank=True, db_index=True)
+    confidence = models.FloatField(default=0.0)
+    source_request = models.ForeignKey(
+        HealerRequest,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="dom_snapshots",
+    )
+
+    def __str__(self):
+        return f"{self.page_url} | {self.intent_key or self.use_of_selector}"

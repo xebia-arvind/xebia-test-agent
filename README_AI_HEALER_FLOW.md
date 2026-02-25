@@ -169,3 +169,25 @@ RUN_ID=RUN_DEMO_001 npx playwright test tests/product/add-to-cart.spec.ts
 - Embedding retrieval over historical snapshots
 - Retrieval provenance in response (top-k evidence)
 - Offline evaluation benchmark for retrieval quality
+
+---
+
+## 10. Phase 2: Auto Test Generation
+
+### New endpoints
+- `POST /test-generation/jobs/`
+- `GET /test-generation/jobs/<job_id>/`
+- `POST /test-generation/jobs/<job_id>/approve/`
+- `POST /test-generation/jobs/<job_id>/materialize/`
+- `POST /test-generation/jobs/<job_id>/reject/`
+- `POST /test-generation/jobs/<job_id>/link-run/`
+
+### Flow
+1. Create generation job with feature description + seed URLs.
+2. Django calls a Playwright crawl runner to capture route/DOM context.
+3. Local LLM (Ollama) plans scenarios and drafts page/spec files.
+4. Guardrails validate generated code before draft is marked ready.
+5. User approves and materializes files under:
+   - `tests/generated/`
+   - `tests/pages/generated/`
+6. After test execution, link `run_id` to generation job for analytics correlation.

@@ -7,7 +7,8 @@ from urllib.error import URLError
 from functools import lru_cache
 from pathlib import Path
 
-from curertestai.models import HealerRequest
+from curertestai.models import HealerRequest, DomSnapshot
+from curertestai.fingerprint import jaccard_similarity
 
 
 def _normalize(s: str) -> str:
@@ -140,7 +141,7 @@ def _llm_score(intent: str, use_of_selector: str, candidate: Dict[str, Any], fai
 
     url = os.getenv("LLM_VALIDATION_URL", "http://127.0.0.1:11434/api/generate")
     model = os.getenv("LLM_VALIDATION_MODEL", "qwen2.5:7b")
-    timeout = int(os.getenv("LLM_VALIDATION_TIMEOUT_SECONDS", "4"))
+    timeout = int(os.getenv("LLM_VALIDATION_TIMEOUT_SECONDS", "10"))
 
     prompt = (
         "You are a strict UI automation validator. "
@@ -159,6 +160,10 @@ def _llm_score(intent: str, use_of_selector: str, candidate: Dict[str, Any], fai
         "prompt": prompt,
         "stream": False,
         "format": "json",
+        "options": {
+            "temperature": 0,
+            "num_predict": 120,
+        },
     }
 
     req = urllib_request.Request(
@@ -173,11 +178,81 @@ def _llm_score(intent: str, use_of_selector: str, candidate: Dict[str, Any], fai
             raw = response.read().decode("utf-8")
             parsed = json.loads(raw)
             model_output = parsed.get("response", "{}")
+
             score_payload = json.loads(model_output) if isinstance(model_output, str) else model_output
             score = float(score_payload.get("score", 0.0))
             return max(0.0, min(1.0, score))
     except (URLError, ValueError, TimeoutError, json.JSONDecodeError):
         return 0.0
+
+
+def _retrieval_boost(
+    page_url: str,
+    use_of_selector: str,
+    intent_key: str,
+    candidate_selector: str,
+    current_signature_tokens: List[str],
+) -> Tuple[float, List[Dict[str, Any]]]:
+    if not current_signature_tokens:
+        return 0.0, []
+
+    try:
+        query = DomSnapshot.objects.filter(
+            page_url=page_url or "",
+            success=True,
+            validation_status="VALID",
+        ).exclude(healed_selector__isnull=True).exclude(healed_selector__exact="")
+
+        if intent_key:
+            query = query.filter(intent_key=intent_key)
+        else:
+            query = query.filter(use_of_selector=use_of_selector or "")
+
+        query = query.filter(healed_selector__iexact=candidate_selector).order_by("-created_on")[:40]
+        if not query:
+            return 0.0, []
+    except Exception:
+        return 0.0, []
+
+    current_set = set(current_signature_tokens)
+    scored_hits: List[Tuple[float, DomSnapshot]] = []
+    for snap in query:
+        snap_tokens = snap.signature_tokens or []
+        if not snap_tokens:
+            continue
+        similarity = jaccard_similarity(current_set, set(str(t) for t in snap_tokens))
+        scored_hits.append((similarity, snap))
+
+    if not scored_hits:
+        return 0.0, []
+
+    scored_hits.sort(key=lambda x: x[0], reverse=True)
+    top_hits = scored_hits[:3]
+    best_similarity = top_hits[0][0]
+
+    if best_similarity >= 0.85:
+        boost = 0.20
+    elif best_similarity >= 0.70:
+        boost = 0.14
+    elif best_similarity >= 0.55:
+        boost = 0.08
+    elif best_similarity >= 0.40:
+        boost = 0.04
+    else:
+        boost = 0.0
+
+    provenance = [
+        {
+            "snapshot_id": hit.id,
+            "similarity": round(sim, 4),
+            "created_on": hit.created_on.isoformat(),
+            "healed_selector": hit.healed_selector,
+            "dom_fingerprint": hit.dom_fingerprint,
+            "source_request_id": hit.source_request_id,
+        }
+        for sim, hit in top_hits
+    ]
+    return boost, provenance
 
 
 def select_validated_candidate(
@@ -187,21 +262,38 @@ def select_validated_candidate(
     use_of_selector: str,
     page_url: str,
     intent_key: str = "",
+    current_signature_tokens: List[str] | None = None,
+    ui_change_level: str = "UNKNOWN",
 ) -> Dict[str, Any]:
     if not candidates:
+        no_candidate_reason = "No candidates available"
+        if ui_change_level == "ELEMENT_REMOVED":
+            no_candidate_reason = (
+                "No candidates available. Historical comparison indicates target element was removed from UI."
+            )
+        elif ui_change_level == "MAJOR_CHANGE":
+            no_candidate_reason = (
+                "No candidates available. Historical comparison indicates major UI change."
+            )
         return {
             "chosen": None,
             "validation_status": "NO_SAFE_MATCH",
-            "validation_reason": "No candidates available",
+            "validation_reason": no_candidate_reason,
             "llm_used": _llm_enabled(),
             "history_assisted": False,
             "history_hits": 0,
+            "retrieval_assisted": False,
+            "retrieval_hits": 0,
+            "retrieved_versions": [],
         }
 
     intent = _resolve_intent(intent_key, use_of_selector)
     scored: List[Tuple[float, Dict[str, Any], str]] = []
     invalid_reasons: List[str] = []
     total_history_hits = 0
+    total_retrieval_hits = 0
+    retrieval_by_selector: Dict[str, List[Dict[str, Any]]] = {}
+    current_tokens = current_signature_tokens or []
 
     for candidate in candidates:
         selector = candidate.get("selector", "")
@@ -213,14 +305,34 @@ def select_validated_candidate(
         base = float(candidate.get("score", 0.0))
         history, history_hits = _history_boost(page_url, use_of_selector, selector)
         total_history_hits += history_hits
+        retrieval, retrieved_versions = _retrieval_boost(
+            page_url=page_url,
+            use_of_selector=use_of_selector,
+            intent_key=intent_key,
+            candidate_selector=selector,
+            current_signature_tokens=current_tokens,
+        )
+        total_retrieval_hits += len(retrieved_versions)
+        if retrieved_versions:
+            retrieval_by_selector[_normalize(selector)] = retrieved_versions
         llm = _llm_score(intent, use_of_selector, candidate, failed_selector)
-        final_score = (0.75 * base) + (0.15 * max(0.0, history + 0.2) / 0.4) + (0.10 * llm)
+        history_norm = max(0.0, history + 0.2) / 0.4
+        retrieval_norm = max(0.0, min(1.0, retrieval / 0.20))
+        final_score = (0.70 * base) + (0.12 * history_norm) + (0.10 * llm) + (0.08 * retrieval_norm)
         scored.append((final_score, candidate, "VALID"))
 
     if not scored:
         reason = "No candidate passed validation rules"
         if invalid_reasons:
             reason = f"{reason}. Rejections: {' | '.join(invalid_reasons[:3])}"
+        if ui_change_level == "ELEMENT_REMOVED":
+            reason = (
+                "No safe match. Historical comparison indicates target element was removed from UI."
+            )
+        elif ui_change_level == "MAJOR_CHANGE":
+            reason = (
+                "No safe match. Historical comparison indicates major UI change; suggestions blocked for safety."
+            )
         return {
             "chosen": None,
             "validation_status": "NO_SAFE_MATCH",
@@ -228,6 +340,9 @@ def select_validated_candidate(
             "llm_used": _llm_enabled(),
             "history_assisted": total_history_hits > 0,
             "history_hits": total_history_hits,
+            "retrieval_assisted": total_retrieval_hits > 0,
+            "retrieval_hits": total_retrieval_hits,
+            "retrieved_versions": [],
         }
 
     scored.sort(key=lambda x: x[0], reverse=True)
@@ -242,13 +357,22 @@ def select_validated_candidate(
             "llm_used": _llm_enabled(),
             "history_assisted": total_history_hits > 0,
             "history_hits": total_history_hits,
+            "retrieval_assisted": total_retrieval_hits > 0,
+            "retrieval_hits": total_retrieval_hits,
+            "retrieved_versions": [],
         }
 
+    chosen_selector = best_candidate.get("selector") or ""
+    retrieved_versions = retrieval_by_selector.get(_normalize(chosen_selector), [])
+
     return {
-        "chosen": best_candidate.get("selector"),
+        "chosen": chosen_selector,
         "validation_status": "VALID",
         "validation_reason": "Selector passed rule/history/LLM validation",
         "llm_used": _llm_enabled(),
         "history_assisted": total_history_hits > 0,
         "history_hits": total_history_hits,
+        "retrieval_assisted": total_retrieval_hits > 0,
+        "retrieval_hits": total_retrieval_hits,
+        "retrieved_versions": retrieved_versions,
     }

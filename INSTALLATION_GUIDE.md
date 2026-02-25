@@ -188,6 +188,19 @@ export USE_LLM_VALIDATION=true
 export LLM_VALIDATION_URL=http://127.0.0.1:11434/api/generate
 export LLM_VALIDATION_MODEL=qwen2.5:7b
 export LLM_VALIDATION_TIMEOUT_SECONDS=8
+
+# Optional: selector cache fast-path (recommended)
+export USE_HEALING_CACHE=true
+export HEALING_CACHE_MIN_CONFIDENCE=0.30
+export HEALING_CACHE_MAX_AGE_DAYS=14
+
+# Phase-2 test generation
+export USE_TEST_GEN=true
+export TEST_GEN_LLM_URL=http://127.0.0.1:11434/api/generate
+export TEST_GEN_LLM_MODEL=qwen2.5:7b
+export TEST_GEN_TIMEOUT_SECONDS=20
+export TEST_GEN_MAX_SCENARIOS=8
+export TEST_GEN_MAX_ROUTES=20
 ```
 
 Then run Django server again.

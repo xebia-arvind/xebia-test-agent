@@ -3,7 +3,7 @@ import { CartContext } from "../context/CartContext";
 import { useNavigate } from "react-router-dom";
 
 function Checkout() {
-    const { cart, clearCart, saveOrder } = useContext(CartContext);
+    const { cart, clearCart, saveOrder, appliedCoupon } = useContext(CartContext);
     const navigate = useNavigate();
 
     const [shipping, setShipping] = useState({
@@ -23,10 +23,21 @@ function Checkout() {
     const [sameAsShipping, setSameAsShipping] = useState(false);
     const [loading, setLoading] = useState(false);
 
-    const total = cart.reduce(
+    const subtotal = cart.reduce(
         (sum, item) => sum + item.price * item.quantity,
         0
     );
+
+    let discount = 0;
+    if (appliedCoupon) {
+        if (appliedCoupon.type === "PERCENT") {
+            discount = (subtotal * appliedCoupon.value) / 100;
+        } else if (appliedCoupon.type === "FLAT") {
+            discount = appliedCoupon.value;
+        }
+    }
+
+    const total = subtotal - discount;
 
     const handlePayment = () => {
         if (!shipping.name || !shipping.address) {
@@ -39,7 +50,10 @@ function Checkout() {
         const orderData = {
             id: Date.now(),
             items: cart,
+            subtotal,
+            discount,
             total,
+            coupon: appliedCoupon ? appliedCoupon.code : null,
             shipping,
             billing: finalBilling,
             date: new Date().toLocaleString(),
@@ -50,6 +64,7 @@ function Checkout() {
         setTimeout(() => {
             saveOrder(orderData);
             clearCart();
+            localStorage.removeItem("coupon"); // Clear coupon after order
             navigate("/confirmation");
         }, 2000);
     };
@@ -64,12 +79,26 @@ function Checkout() {
                     <div className="card p-3 shadow-sm">
                         <h5>Order Details</h5>
                         {cart.map((item) => (
-                            <div key={item.id}>
-                                {item.name} x {item.quantity}
+                            <div key={item.id} className="d-flex justify-content-between small mb-1">
+                                <span>{item.name} x {item.quantity}</span>
+                                <span>₹{item.price * item.quantity}</span>
                             </div>
                         ))}
                         <hr />
-                        <h6>Total: ₹{total}</h6>
+                        <div className="d-flex justify-content-between mb-1">
+                            <span>Subtotal:</span>
+                            <span>₹{subtotal}</span>
+                        </div>
+                        {discount > 0 && (
+                            <div className="d-flex justify-content-between mb-1 text-danger">
+                                <span>Discount ({appliedCoupon.code}):</span>
+                                <span>-₹{discount}</span>
+                            </div>
+                        )}
+                        <div className="d-flex justify-content-between fw-bold h6 mt-2">
+                            <span>Total:</span>
+                            <span>₹{total}</span>
+                        </div>
                     </div>
                 </div>
 

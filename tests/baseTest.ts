@@ -63,6 +63,8 @@ test.afterEach(async ({ page }, testInfo) => {
         uiChangeLevel: trackedFailure.uiChangeLevel || "",
         historyAssisted: trackedFailure.historyAssisted ?? false,
         historyHits: trackedFailure.historyHits ?? 0,
+        cacheHit: trackedFailure.cacheHit ?? false,
+        cacheFallbackToFresh: trackedFailure.cacheFallbackToFresh ?? false,
         rootCause: trackedFailure.rootCause || parsedFailure.failureReason || "unknown",
         stepEvents: trackedFailure.stepEvents || [],
     };
@@ -90,6 +92,8 @@ test.afterEach(async ({ page }, testInfo) => {
         ui_change_level: mergedFailure.uiChangeLevel,
         history_assisted: mergedFailure.historyAssisted,
         history_hits: mergedFailure.historyHits,
+        cache_hit: mergedFailure.cacheHit,
+        cache_fallback_to_fresh: mergedFailure.cacheFallbackToFresh,
         root_cause: mergedFailure.rootCause,
         step_events: mergedFailure.stepEvents,
 

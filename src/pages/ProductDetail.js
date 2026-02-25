@@ -5,10 +5,18 @@ import { CartContext } from "../context/CartContext";
 
 function ProductDetail() {
     const { id } = useParams();
-    const { addToCart } = useContext(CartContext);
+    const { addToCart, toggleWishlist, isWishlisted } = useContext(CartContext);
     const [animate, setAnimate] = useState(false);
 
     const product = products.find((p) => p.id === parseInt(id));
+    if (!product) {
+        return (
+            <div className="container mt-4">
+                <h3>Product not found</h3>
+            </div>
+        );
+    }
+    const wishlisted = isWishlisted(product.id);
 
     const handleAdd = () => {
         addToCart(product);
@@ -35,13 +43,21 @@ function ProductDetail() {
                     <p>{product.description}</p>
                     <h4 className="text-success">₹{product.price}</h4>
 
-                    <button
-                        className={`btn btn-primary ${animate ? "added-animation" : ""
-                            }`}
-                        onClick={handleAdd}
-                    >
-                        Add to Cart
-                    </button>
+                    <div className="d-flex gap-2">
+                        <button
+                            className={`btn btn-primary ${animate ? "added-animation" : ""
+                                }`}
+                            onClick={handleAdd}
+                        >
+                            Add to Cart
+                        </button>
+                        <button
+                            className={`btn ${wishlisted ? "btn-warning" : "btn-outline-warning"}`}
+                            onClick={() => toggleWishlist(product)}
+                        >
+                            {wishlisted ? "Remove from Wishlist" : "Add to Wishlist"}
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>

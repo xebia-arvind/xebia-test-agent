@@ -56,6 +56,8 @@ class TestCaseResult(Common):
     ui_change_level = models.CharField(max_length=32, null=True, blank=True, db_index=True)
     history_assisted = models.BooleanField(default=False)
     history_hits = models.IntegerField(default=0)
+    cache_hit = models.BooleanField(default=False)
+    cache_fallback_to_fresh = models.BooleanField(default=False)
     root_cause = models.TextField(null=True, blank=True)
     step_events = models.JSONField(null=True, blank=True)
 

@@ -1,5 +1,5 @@
 from django.contrib import admin
-from curertestai.models import HealerRequest, HealerRequestBatch, SuggestedSelector
+from curertestai.models import HealerRequest, HealerRequestBatch, SuggestedSelector, DomSnapshot
 # Register your models here.
 
 class SuggestedSelectorInline(admin.TabularInline):
@@ -25,6 +25,7 @@ class HealerRequestAdmin(admin.ModelAdmin):
         'processing_time_ms',
         'llm_used',
         'screenshot_analyzed',
+        'created_on',
     )
     list_filter = (
         'batch_id',
@@ -42,7 +43,27 @@ admin.site.register(HealerRequest, HealerRequestAdmin)
 
 
 class HealerRequestBatchAdmin(admin.ModelAdmin):
-    list_display = ('id','total_requests', 'success', 'failure', 'processing_time_ms')
+    list_display = ('id','total_requests', 'success', 'failure', 'processing_time_ms', 'created_on')
     list_filter = ('total_requests', 'success', 'failure', 'processing_time_ms')
    
 admin.site.register(HealerRequestBatch, HealerRequestBatchAdmin)
+
+
+class DomSnapshotAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "page_url",
+        "intent_key",
+        "use_of_selector",
+        "healed_selector",
+        "validation_status",
+        "success",
+        "confidence",
+        "source_request",
+    )
+    list_filter = ("success", "validation_status", "intent_key")
+    search_fields = ("page_url", "use_of_selector", "failed_selector", "healed_selector", "dom_fingerprint")
+    ordering = ("-created_on",)
+
+
+admin.site.register(DomSnapshot, DomSnapshotAdmin)

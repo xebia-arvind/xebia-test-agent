@@ -365,6 +365,12 @@
       <article class="kpi warn"><div class="label">Healing Attempted</div><div class="value" id="kAttempted">0</div></article>
       <article class="kpi ok"><div class="label">Healing Success</div><div class="value" id="kHealSuccess">0</div></article>
       <article class="kpi bad"><div class="label">False Positive</div><div class="value" id="kFalsePos">0</div></article>
+      <article class="kpi ok"><div class="label">Cache Hits</div><div class="value" id="kCacheHits">0</div></article>
+      <article class="kpi warn"><div class="label">Cache Misses</div><div class="value" id="kCacheMisses">0</div></article>
+      <article class="kpi bad"><div class="label">Cache Fallback</div><div class="value" id="kCacheFallback">0</div></article>
+      <article class="kpi"><div class="label">Generation Jobs</div><div class="value" id="kGenJobs">0</div></article>
+      <article class="kpi ok"><div class="label">Generated Pass Rate %</div><div class="value" id="kGenPassRate">0</div></article>
+      <article class="kpi warn"><div class="label">Materialized Ratio %</div><div class="value" id="kGenMaterializeRate">0</div></article>
     </section>
 
     <section class="content">
@@ -387,6 +393,12 @@
       <article class="card">
         <h2>Top Failed Selectors</h2>
         <div id="selectorChart"></div>
+      </article>
+
+      <article class="card">
+        <h2>Generation Jobs</h2>
+        <div class="muted" id="generationMeta"></div>
+        <div id="generationChart" style="margin-top:8px;"></div>
       </article>
 
       <article class="card">
@@ -468,12 +480,20 @@
     const kAttempted = document.getElementById("kAttempted");
     const kHealSuccess = document.getElementById("kHealSuccess");
     const kFalsePos = document.getElementById("kFalsePos");
+    const kCacheHits = document.getElementById("kCacheHits");
+    const kCacheMisses = document.getElementById("kCacheMisses");
+    const kCacheFallback = document.getElementById("kCacheFallback");
+    const kGenJobs = document.getElementById("kGenJobs");
+    const kGenPassRate = document.getElementById("kGenPassRate");
+    const kGenMaterializeRate = document.getElementById("kGenMaterializeRate");
 
     const failureChart = document.getElementById("failureChart");
     const healingChart = document.getElementById("healingChart");
     const selectorChart = document.getElementById("selectorChart");
     const historyChart = document.getElementById("historyChart");
+    const generationChart = document.getElementById("generationChart");
     const historyMeta = document.getElementById("historyMeta");
+    const generationMeta = document.getElementById("generationMeta");
     const recentFailuresBody = document.getElementById("recentFailuresBody");
     const detailPanel = document.getElementById("detailPanel");
     const detailMeta = document.getElementById("detailMeta");
@@ -603,6 +623,27 @@
       renderBars(historyChart, bucketRows, "name", "count", "green");
     }
 
+    function renderGenerationSummary(summary) {
+      const stats = summary || {};
+      const jobStatuses = stats.job_status_breakdown || [];
+      const approvalRatio = Number(stats.approval_ratio || 0).toFixed(2);
+      const materializationRatio = Number(stats.materialization_ratio || 0).toFixed(2);
+      const generated = stats.generated_test_results || {};
+      const passRate = Number(generated.pass_rate || 0).toFixed(2);
+
+      generationMeta.textContent =
+        `Approved ratio: ${approvalRatio}% | Materialized ratio: ${materializationRatio}% | ` +
+        `Generated pass rate: ${passRate}%`;
+
+      renderBars(
+        generationChart,
+        jobStatuses.map((x) => ({ name: x.job_status || "UNKNOWN", count: x.count || 0 })),
+        "name",
+        "count",
+        "blue"
+      );
+    }
+
     function syncFiltersToUrl() {
       const params = new URLSearchParams();
       if (runIdInput.value.trim()) params.set("run_id", runIdInput.value.trim());
@@ -654,6 +695,9 @@
         const data = await resp.json();
         const totals = data.totals || {};
         const healing = data.healing_summary || {};
+        const cache = data.cache_summary || {};
+        const generation = data.generation_summary || {};
+        const generatedResults = generation.generated_test_results || {};
 
         kTotal.textContent = totals.total_tests ?? 0;
         kPassed.textContent = totals.passed ?? 0;
@@ -661,10 +705,17 @@
         kAttempted.textContent = healing.attempted ?? 0;
         kHealSuccess.textContent = healing.success ?? 0;
         kFalsePos.textContent = healing.false_positive ?? 0;
+        kCacheHits.textContent = cache.cache_hits ?? 0;
+        kCacheMisses.textContent = cache.cache_misses ?? 0;
+        kCacheFallback.textContent = cache.cache_fallback_to_fresh ?? 0;
+        kGenJobs.textContent = generation.total_jobs ?? 0;
+        kGenPassRate.textContent = Number(generatedResults.pass_rate ?? 0).toFixed(2);
+        kGenMaterializeRate.textContent = Number(generation.materialization_ratio ?? 0).toFixed(2);
 
         renderBars(failureChart, data.failure_breakdown || [], "failure_category", "count", "red");
         renderHealingSummary(healing);
         renderHistorySummary(data.history_summary || {});
+        renderGenerationSummary(generation);
         renderBars(selectorChart, data.top_failed_selectors || [], "failed_selector", "count", "blue");
         renderRecentFailures(data.recent_failures || []);
 
@@ -675,6 +726,8 @@
         healingChart.innerHTML = html;
         historyChart.innerHTML = html;
         historyMeta.textContent = "Failed to load history metrics.";
+        generationChart.innerHTML = html;
+        generationMeta.textContent = "Failed to load generation metrics.";
         selectorChart.innerHTML = html;
         recentFailuresBody.innerHTML = '<tr><td colspan="11" class="muted">Could not load failures.</td></tr>';
       }

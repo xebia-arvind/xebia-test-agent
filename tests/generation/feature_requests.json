@@ -1,0 +1,63 @@
+{
+  "backend_url": "http://127.0.0.1:8000",
+  "base_url": "http://localhost:3000",
+  "created_by": "manual-file-runner",
+  "jobs": [
+    {
+      "feature_name": "Coupon",
+      "feature_description": "User can apply discount coupons in the cart summary section ('Have a coupon?') and see updated totals. The 'Apply' button enables after typing a code. Coupons persist across refreshes.",
+      "seed_urls": [
+        "/",
+        "/cart"
+      ],
+      "coverage_mode": "SMOKE_NEGATIVE",
+      "max_scenarios": 6,
+      "max_routes": 15,
+      "intent_hints": [
+        "Have a coupon?",
+        "Apply coupon",
+        "Enter code",
+        "discount"
+      ],
+      "scenarios": [
+        {
+          "title": "Apply valid PERCENT coupon",
+          "steps": [
+            "Add a product to cart",
+            "Go to cart",
+            "Type 'SAVE10' into 'Enter code' input",
+            "Click 'Apply' button"
+          ],
+          "assertions": [
+            "Discount is applied to the total",
+            "Coupon success message is shown"
+          ]
+        },
+        {
+          "title": "Coupon persistence after refresh",
+          "steps": [
+            "Add product to cart",
+            "Apply coupon 'SAVE10' in cart",
+            "Refresh the browser page"
+          ],
+          "assertions": [
+            "Coupon remains applied after refresh",
+            "Total still shows the discount"
+          ]
+        },
+        {
+          "title": "Apply invalid coupon",
+          "steps": [
+            "Add product to cart",
+            "Go to cart",
+            "Enter 'INVALID_CODE' and click apply"
+          ],
+          "assertions": [
+            "Error message 'Invalid coupon code' is displayed",
+            "Total remains unchanged"
+          ]
+        }
+      ]
+    }
+  ]
+}

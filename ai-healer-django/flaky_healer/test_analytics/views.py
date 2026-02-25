@@ -5,9 +5,13 @@ from django.shortcuts import get_object_or_404
 from django.db.models import Count, Case, When, Value, CharField
 from django.views.generic import TemplateView
 
-from .models import TestRun, TestCaseResult
+from .models import (
+    TestRun,
+    TestCaseResult,
+)
 from .serializers import TestCaseResultSerializer
 from .classifier import classify_failure
+from test_generation.models import GenerationJob
 
 
 class PlaywrightResultAPIView(APIView):
@@ -93,6 +97,9 @@ class TestAnalyticsSummaryAPIView(APIView):
         healing_false_positive = qs.filter(
             failure_category="HEALING_FALSE_POSITIVE"
         ).count()
+        cache_hits = qs.filter(cache_hit=True).count()
+        cache_fallback_to_fresh = qs.filter(cache_fallback_to_fresh=True).count()
+        cache_misses = qs.filter(healing_attempted=True, cache_hit=False).count()
 
         healing_qs = qs.filter(healing_attempted=True)
         assisted_qs = healing_qs.filter(history_assisted=True)
@@ -168,6 +175,43 @@ class TestAnalyticsSummaryAPIView(APIView):
             )[:10]
         )
 
+        generation_jobs_qs = GenerationJob.objects.all()
+        if run_id:
+            generation_jobs_qs = generation_jobs_qs.filter(
+                execution_links__test_run__run_id=run_id
+            ).distinct()
+        if build_id:
+            generation_jobs_qs = generation_jobs_qs.filter(
+                execution_links__test_run__build_id=build_id
+            ).distinct()
+        if environment:
+            generation_jobs_qs = generation_jobs_qs.filter(
+                execution_links__test_run__environment=environment
+            ).distinct()
+
+        job_status_counts = list(
+            generation_jobs_qs.values("job_status").annotate(count=Count("id")).order_by("job_status")
+        )
+        total_jobs = generation_jobs_qs.count()
+        approved_jobs = generation_jobs_qs.filter(job_status=GenerationJob.STATE_APPROVED).count()
+        materialized_jobs = generation_jobs_qs.filter(job_status=GenerationJob.STATE_MATERIALIZED).count()
+        generated_execution = (
+            TestCaseResult.objects.filter(test_run__generation_links__isnull=False)
+            .values("status")
+            .annotate(count=Count("id"))
+        )
+        generated_total = sum(row["count"] for row in generated_execution)
+        generated_passed = next((row["count"] for row in generated_execution if row["status"] == "PASSED"), 0)
+        generated_failed = next((row["count"] for row in generated_execution if row["status"] == "FAILED"), 0)
+        generated_healing_attempted = TestCaseResult.objects.filter(
+            test_run__generation_links__isnull=False,
+            healing_attempted=True,
+        ).count()
+        generated_healing_success = TestCaseResult.objects.filter(
+            test_run__generation_links__isnull=False,
+            healing_outcome="SUCCESS",
+        ).count()
+
         return Response(
             {
                 "filters": {
@@ -189,6 +233,11 @@ class TestAnalyticsSummaryAPIView(APIView):
                     "not_attempted": healing_not_attempted,
                     "false_positive": healing_false_positive,
                 },
+                "cache_summary": {
+                    "cache_hits": cache_hits,
+                    "cache_misses": cache_misses,
+                    "cache_fallback_to_fresh": cache_fallback_to_fresh,
+                },
                 "history_summary": {
                     "assisted_attempts": assisted_attempts,
                     "assisted_success": assisted_success,
@@ -200,6 +249,22 @@ class TestAnalyticsSummaryAPIView(APIView):
                 },
                 "top_failed_selectors": top_failed_selectors,
                 "recent_failures": recent_failures,
+                "generation_summary": {
+                    "total_jobs": total_jobs,
+                    "job_status_breakdown": job_status_counts,
+                    "approved_jobs": approved_jobs,
+                    "materialized_jobs": materialized_jobs,
+                    "approval_ratio": round((approved_jobs * 100.0 / total_jobs), 2) if total_jobs else 0.0,
+                    "materialization_ratio": round((materialized_jobs * 100.0 / total_jobs), 2) if total_jobs else 0.0,
+                    "generated_test_results": {
+                        "total": generated_total,
+                        "passed": generated_passed,
+                        "failed": generated_failed,
+                        "pass_rate": round((generated_passed * 100.0 / generated_total), 2) if generated_total else 0.0,
+                        "healing_attempted": generated_healing_attempted,
+                        "healing_success": generated_healing_success,
+                    },
+                },
             },
             status=status.HTTP_200_OK,
         )

@@ -16,6 +16,29 @@ import os
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def _load_local_env() -> None:
+    """
+    Minimal .env loader (no extra dependency required).
+    Loads KEY=VALUE pairs into process env if key is not already set.
+    """
+    env_file = BASE_DIR / ".env"
+    if not env_file.exists():
+        return
+
+    for raw in env_file.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_local_env()
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.0/howto/deployment/checklist/
 
@@ -44,6 +67,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'curertestai',
     'test_analytics',
+    'test_generation',
 ]
 X_FRAME_OPTIONS = "SAMEORIGIN"
 SILENCED_SYSTEM_CHECKS = ["security.W019"]

@@ -24,6 +24,8 @@ type FailureContext = {
   uiChangeLevel?: string;
   historyAssisted?: boolean;
   historyHits?: number;
+  cacheHit?: boolean;
+  cacheFallbackToFresh?: boolean;
   rootCause?: string;
   stepEvents?: StepEvent[];
 };

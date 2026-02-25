@@ -3,7 +3,11 @@ from django.utils.html import format_html
 from django.urls import reverse
 from django.http import HttpResponseRedirect
 from django.urls import path
-from .models import TestRun, TestCaseResult, AnalyticsDashboardLink
+from .models import (
+    TestRun,
+    TestCaseResult,
+    AnalyticsDashboardLink,
+)
 
 # Register your models here.
 class TestRunAdmin(admin.ModelAdmin):
@@ -15,6 +19,7 @@ class TestRunAdmin(admin.ModelAdmin):
         'execution_time',
         # 'summary_link',
         # 'dashboard_link',
+        'created_on',
     )
     list_filter = ('environment', 'build_id')
     search_fields = ('run_id', 'build_id')
@@ -48,6 +53,7 @@ class TestCaseResultAdmin(admin.ModelAdmin):
         'test_run',
         # 'detail_link',
         # 'dashboard_link',
+        'created_on',
     )
     list_filter = ('status', 'failure_category', 'healing_outcome', 'test_run')
     search_fields = ('test_name', 'test_run__run_id', 'failed_selector', 'root_cause')

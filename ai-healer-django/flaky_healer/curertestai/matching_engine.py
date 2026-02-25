@@ -118,6 +118,15 @@ class MatchingEngine:
 
         # Build corpus
         self.corpus_texts = [flatten_element(el) for el in elements]
+        self.ready = True
+
+        if not self.corpus_texts:
+            # No retrievable DOM content.
+            self.ready = False
+            self.embeddings = np.zeros((0, 0))
+            self.dim = 0
+            self.faiss_ok = False
+            return
 
         # Embeddings
         if self.use_sbert:
@@ -126,10 +135,26 @@ class MatchingEngine:
                 self.corpus_texts, show_progress_bar=False, convert_to_numpy=True
             )
         else:
-            self.vectorizer = TfidfVectorizer(ngram_range=(1, 2))
-            self.embeddings = self.vectorizer.fit_transform(self.corpus_texts).toarray()
+            try:
+                self.vectorizer = TfidfVectorizer(ngram_range=(1, 2))
+                self.embeddings = self.vectorizer.fit_transform(self.corpus_texts).toarray()
+            except ValueError:
+                # Fallback when vocabulary cannot be built from sparse/noisy corpus.
+                self.vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5))
+                try:
+                    self.embeddings = self.vectorizer.fit_transform(self.corpus_texts).toarray()
+                except ValueError:
+                    self.ready = False
+                    self.embeddings = np.zeros((0, 0))
+                    self.dim = 0
+                    self.faiss_ok = False
+                    return
 
         self.dim = self.embeddings.shape[1]
+        if self.dim == 0:
+            self.ready = False
+            self.faiss_ok = False
+            return
 
         # Retrieval index
         if self.use_faiss:
@@ -190,6 +215,9 @@ class MatchingEngine:
         return min(1, score)
 
     def rank(self, selector: str, semantic: str, top_k=10):
+        if not self.ready or not self.elements:
+            return []
+
         qvec = self.embed_query(selector, semantic)
         idxs, sims = self.retrieve(qvec, top_k)
 

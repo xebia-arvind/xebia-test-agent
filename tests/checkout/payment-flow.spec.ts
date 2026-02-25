@@ -32,7 +32,7 @@ test('User can complete checkout flow', async ({ page }, testInfo) => {
     console.log('Step 4: Clicking "Add to Cart" (with self-healing)...');
     await selfHealingClick(
         page,
-        page.getByRole('button', { name: /Add to Cartasda/i }),
+        page.getByRole('button', { name: /Add to Cart/i }),
         "button.old-add-to-cart",
         testInfo,
         {
