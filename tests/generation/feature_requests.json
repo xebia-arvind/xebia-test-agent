@@ -4,6 +4,42 @@
   "created_by": "manual-file-runner",
   "jobs": [
     {
+      "feature_name": "Wishlist",
+      "feature_description": "User can add/remove wishlist item and see validation.",
+      "seed_urls": [
+        "/"
+      ],
+      "coverage_mode": "SMOKE_NEGATIVE",
+      "max_scenarios": 8,
+      "max_routes": 20,
+      "intent_hints": [
+        "wishlist"
+      ],
+      "scenarios": [
+        {
+          "title": "Add product to wishlist",
+          "steps": [
+            "Click 'Wishlist' button on a product"
+          ],
+          "assertions": [
+            "Wishlist count in Navbar increases",
+            "Item is visible on wishlist page"
+          ]
+        },
+        {
+          "title": "Remove product from wishlist",
+          "steps": [
+            "Click on 'Wishlist' icon in Navbar",
+            "Click 'Remove' button on a wishlisted item"
+          ],
+          "assertions": [
+            "Wishlist count decreases",
+            "Removed item is not shown on wishlist page"
+          ]
+        }
+      ]
+    },
+    {
       "feature_name": "Coupon",
       "feature_description": "User can apply discount coupons in the cart summary section ('Have a coupon?') and see updated totals. The 'Apply' button enables after typing a code. Coupons persist across refreshes.",
       "seed_urls": [
