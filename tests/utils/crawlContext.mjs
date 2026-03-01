@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 import { chromium } from "playwright";
+import fs from "fs";
+import path from "path";
+import os from "os";
+
 
 function parseArgs(argv) {
   const args = {};
   for (let i = 2; i < argv.length; i += 1) {
     const key = argv[i];
     const val = argv[i + 1];
-    if (!key.startsWith("--")) continue;
+    if (!key || !key.startsWith("--")) continue;
     args[key.slice(2)] = val;
     i += 1;
   }
@@ -39,6 +43,23 @@ function normalizePath(url) {
   }
 }
 
+function sanitizeFileName(input) {
+  return String(input || "")
+    .replace(/[^a-zA-Z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 120) || "route";
+}
+
+function screenshotFileName(routeUrl, index) {
+  try {
+    const u = new URL(routeUrl);
+    const pathPart = u.pathname === "/" ? "home" : u.pathname.replace(/\//g, "_");
+    return `${String(index).padStart(3, "0")}_${sanitizeFileName(pathPart)}.png`;
+  } catch {
+    return `${String(index).padStart(3, "0")}_route.png`;
+  }
+}
+
 function ignoreRoute(url) {
   const lower = (url || "").toLowerCase();
   return (
@@ -55,20 +76,44 @@ function ignoreRoute(url) {
 
 async function extractRouteData(page, maxInteractables) {
   return page.evaluate((limit) => {
+    function domHash() {
+      const body = document.body?.innerHTML || "";
+      let hash = 0;
+      for (let i = 0; i < body.length; i++) {
+        hash = ((hash << 5) - hash) + body.charCodeAt(i);
+        hash |= 0;
+      }
+      return String(hash);
+    }
+
+    function selectorScore(el) {
+      if (el.getAttribute("data-testid")) return 100;
+      if (el.id) return 90;
+      if (el.getAttribute("aria-label")) return 80;
+      if (el.getAttribute("name")) return 70;
+      if (el.className) return 40;
+      return 20;
+    }
+
     const nodes = Array.from(
       document.querySelectorAll(
         'a, button, input, textarea, select, [role], [data-testid], [aria-label]'
       )
     );
+
     const interactables = nodes.slice(0, limit).map((el) => {
+      const rect = el.getBoundingClientRect();
       const tag = (el.tagName || "").toLowerCase();
       const role = el.getAttribute("role") || "";
       const testId = el.getAttribute("data-testid") || "";
       const aria = el.getAttribute("aria-label") || "";
-      const id = el.getAttribute("id") || "";
+      const id = el.id || "";
       const name = el.getAttribute("name") || "";
       const type = el.getAttribute("type") || "";
-      const text = (el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 120);
+      const text = (el.textContent || "")
+        .trim()
+        .replace(/\s+/g, " ")
+        .slice(0, 120);
       const href = el.getAttribute("href") || "";
 
       const selectorHints = [];
@@ -91,7 +136,15 @@ async function extractRouteData(page, maxInteractables) {
         type,
         text,
         href,
-        selector_hints: selectorHints.slice(0, 6),
+        selector_hints: selectorHints.slice(0, 8),
+        selector_score: selectorScore(el),
+        layout: {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+        },
+        parent_tag: el.parentElement?.tagName?.toLowerCase() || "",
       };
     });
 
@@ -118,6 +171,7 @@ async function extractRouteData(page, maxInteractables) {
 
     return {
       title: document.title || "",
+      dom_hash: domHash(),
       interactables,
       forms: forms.slice(0, 20),
       links: links.slice(0, 300),
@@ -131,6 +185,7 @@ async function run() {
   const maxRoutes = Number(args["max-routes"] || 20);
   const maxDepth = Number(args["max-depth"] || 2);
   const maxInteractables = Number(args["max-interactables"] || 200);
+  const screenshotDir = args["screenshot-dir"] || "";
   const seedUrls = safeJsonParse(args["seed-urls"] || "[]", []);
 
   const queue = [];
@@ -147,10 +202,37 @@ async function run() {
   let browser;
   const routes = [];
   try {
-    browser = await chromium.launch({ headless: true });
+    const userCache = path.join(os.homedir(), "Library", "Caches", "ms-playwright");
+    const cftPath = path.join(
+      userCache,
+      "chromium-1208",
+      "chrome-mac-arm64",
+      "Google Chrome for Testing.app",
+      "Contents",
+      "MacOS",
+      "Google Chrome for Testing"
+    );
+    const launchOptions = {
+      headless: true,
+      args: ["--no-sandbox", "--disable-dev-shm-usage"]
+    };
+    const envExecutablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+    if (envExecutablePath && fs.existsSync(envExecutablePath)) {
+      launchOptions.executablePath = envExecutablePath;
+    } else if (fs.existsSync(cftPath)) {
+      launchOptions.executablePath = cftPath;
+    }
+    const envChannel = process.env.PLAYWRIGHT_BROWSER_CHANNEL;
+    if (envChannel) {
+      launchOptions.channel = envChannel;
+    }
+    browser = await chromium.launch(launchOptions);
     const context = await browser.newContext();
     const page = await context.newPage();
     page.setDefaultTimeout(6000);
+    if (screenshotDir) {
+      fs.mkdirSync(screenshotDir, { recursive: true });
+    }
 
     while (queue.length > 0 && routes.length < maxRoutes) {
       const current = queue.shift();
@@ -168,12 +250,25 @@ async function run() {
       }
 
       const data = await extractRouteData(page, maxInteractables);
+      let screenshotPath = "";
+      if (screenshotDir) {
+        try {
+          const filename = screenshotFileName(page.url(), routes.length + 1);
+          const fullPath = path.resolve(path.join(screenshotDir, filename));
+          await page.screenshot({ path: fullPath, fullPage: true });
+          screenshotPath = fullPath;
+        } catch (err) {
+          warnings.push(`Screenshot failed for ${page.url()}: ${String(err).slice(0, 180)}`);
+        }
+      }
       routes.push({
         url: page.url(),
         title: data.title,
         depth: current.depth,
         interactables: data.interactables,
         forms: data.forms,
+        dom_hash: data.dom_hash,
+        screenshot_path: screenshotPath,
       });
 
       if (current.depth >= maxDepth) continue;

@@ -1,9 +1,16 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from django.shortcuts import get_object_or_404
+from rest_framework.authentication import SessionAuthentication
+from rest_framework.permissions import IsAuthenticated
+from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.shortcuts import get_object_or_404, redirect, render
 from django.db.models import Count, Case, When, Value, CharField
+from django.db.utils import OperationalError, ProgrammingError
 from django.views.generic import TemplateView
+from django.views import View
+from django.urls import reverse
 
 from .models import (
     TestRun,
@@ -14,43 +21,78 @@ from .classifier import classify_failure
 from test_generation.models import GenerationJob
 
 
+def _strip_non_bmp(value):
+    if isinstance(value, str):
+        return "".join(ch for ch in value if ord(ch) <= 0xFFFF)
+    if isinstance(value, list):
+        return [_strip_non_bmp(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _strip_non_bmp(v) for k, v in value.items()}
+    return value
+
+
+def _truncate_string(value, max_len: int):
+    return str(value or "")[:max_len]
+
+
 class PlaywrightResultAPIView(APIView):
 
     def post(self, request):
         data = request.data.copy()
-
-        # 🔥 Create or get TestRun
-        test_run, _ = TestRun.objects.get_or_create(
-            run_id=data.get("run_id"),
-            defaults={
-                "environment": data.get("environment"),
-                "build_id": data.get("build_id"),
-                "execution_time": data.get("run_execution_time"),
-            }
-        )
-
-        # Inject FK automatically
-        data["test_run"] = test_run.id
-        data["execution_time"] = data.get("execution_time") or data.get("run_execution_time")
-
-        # Enrich payload with analytics classification
-        data.update(classify_failure(data))
-
-        serializer = TestCaseResultSerializer(data=data)
-
-        if serializer.is_valid():
-            instance = serializer.save()
-            return Response(
-                {
-                    "message": "Saved successfully",
-                    "id": instance.id,
-                    "failure_category": instance.failure_category,
-                    "healing_outcome": instance.healing_outcome,
-                },
-                status=status.HTTP_201_CREATED
+        try:
+            # 🔥 Create or get TestRun
+            test_run, _ = TestRun.objects.get_or_create(
+                run_id=data.get("run_id"),
+                defaults={
+                    "environment": data.get("environment"),
+                    "build_id": data.get("build_id"),
+                    "execution_time": data.get("run_execution_time"),
+                }
             )
 
-        return Response(serializer.errors, status=400)
+            # Inject FK automatically
+            data["test_run"] = test_run.id
+            data["execution_time"] = data.get("execution_time") or data.get("run_execution_time")
+
+            # Enrich payload with analytics classification
+            data.update(classify_failure(data))
+
+            # Defensive cleanup for DB compatibility on special payloads.
+            data = _strip_non_bmp(data)
+            data["run_id"] = _truncate_string(data.get("run_id"), 100)
+            data["environment"] = _truncate_string(data.get("environment"), 50)
+            data["build_id"] = _truncate_string(data.get("build_id"), 100)
+            data["test_name"] = _truncate_string(data.get("test_name"), 255)
+            data["status"] = _truncate_string(data.get("status"), 20)
+            data["failure_category"] = _truncate_string(data.get("failure_category"), 64)
+            data["healing_outcome"] = _truncate_string(data.get("healing_outcome"), 32)
+            data["validation_status"] = _truncate_string(data.get("validation_status"), 32)
+            data["ui_change_level"] = _truncate_string(data.get("ui_change_level"), 32)
+
+            serializer = TestCaseResultSerializer(data=data)
+
+            if serializer.is_valid():
+                instance = serializer.save()
+                return Response(
+                    {
+                        "message": "Saved successfully",
+                        "id": instance.id,
+                        "failure_category": instance.failure_category,
+                        "healing_outcome": instance.healing_outcome,
+                    },
+                    status=status.HTTP_201_CREATED
+                )
+
+            return Response(serializer.errors, status=400)
+        except (OperationalError, ProgrammingError) as exc:
+            return Response(
+                {
+                    "error": "Analytics database write failed",
+                    "detail": str(exc),
+                    "hint": "Check DB charset/migrations. Common fix: utf8mb4 + migrate.",
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
 
 class TestAnalyticsSummaryAPIView(APIView):
@@ -61,6 +103,9 @@ class TestAnalyticsSummaryAPIView(APIView):
       - build_id
       - environment
     """
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
         run_id = request.query_params.get("run_id")
@@ -211,6 +256,24 @@ class TestAnalyticsSummaryAPIView(APIView):
             test_run__generation_links__isnull=False,
             healing_outcome="SUCCESS",
         ).count()
+        recent_jobs = []
+        for job in generation_jobs_qs.order_by("-created_on")[:30]:
+            validation = job.validation_summary or {}
+            recent_jobs.append(
+                {
+                    "job_id": str(job.job_id),
+                    "feature_name": job.feature_name,
+                    "job_status": job.job_status,
+                    "created_by": job.created_by or "",
+                    "approved_by": job.approved_by or "",
+                    "created_on": job.created_on,
+                    "drafting_finished_on": job.drafting_finished_on,
+                    "materialized_on": job.materialized_on,
+                    "total_artifacts": int(validation.get("total_artifacts") or 0),
+                    "valid_artifacts": int(validation.get("valid_artifacts") or 0),
+                    "invalid_artifacts": int(validation.get("invalid_artifacts") or 0),
+                }
+            )
 
         return Response(
             {
@@ -252,6 +315,7 @@ class TestAnalyticsSummaryAPIView(APIView):
                 "generation_summary": {
                     "total_jobs": total_jobs,
                     "job_status_breakdown": job_status_counts,
+                    "recent_jobs": recent_jobs,
                     "approved_jobs": approved_jobs,
                     "materialized_jobs": materialized_jobs,
                     "approval_ratio": round((approved_jobs * 100.0 / total_jobs), 2) if total_jobs else 0.0,
@@ -276,6 +340,9 @@ class TestCaseResultDetailAPIView(APIView):
     Returns full test result details including step_events timeline.
     """
 
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, id: int):
         instance = get_object_or_404(
             TestCaseResult.objects.select_related("test_run"),
@@ -291,13 +358,14 @@ class TestCaseResultDetailAPIView(APIView):
         return Response(data, status=status.HTTP_200_OK)
 
 
-class TestAnalyticsDashboardView(TemplateView):
+class TestAnalyticsDashboardView(LoginRequiredMixin, TemplateView):
     """
     HTML dashboard for demo/analysis.
     Data is fetched client-side from existing summary/detail APIs.
     """
 
     template_name = "test_analytics/dashboard.html"
+    login_url = "test_analytics_login"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -312,3 +380,44 @@ class TestAnalyticsDashboardView(TemplateView):
         )
         context["runs"] = list(runs)
         return context
+
+
+class TestAnalyticsLoginView(View):
+    template_name = "test_analytics/login.html"
+
+    def get(self, request):
+        next_url = request.GET.get("next") or reverse("test_analytics_dashboard")
+        if request.user.is_authenticated:
+            return redirect(next_url)
+        return render(request, self.template_name, {"next": next_url, "error": ""})
+
+    def post(self, request):
+        username = str(request.POST.get("username") or "").strip()
+        password = str(request.POST.get("password") or "")
+        next_url = str(request.POST.get("next") or reverse("test_analytics_dashboard")).strip()
+        if not next_url.startswith("/"):
+            next_url = reverse("test_analytics_dashboard")
+
+        user = authenticate(request, username=username, password=password)
+        if user is None:
+            return render(
+                request,
+                self.template_name,
+                {
+                    "next": next_url,
+                    "error": "Invalid username or password.",
+                },
+                status=401,
+            )
+        login(request, user)
+        return redirect(next_url)
+
+
+class TestAnalyticsLogoutView(View):
+    def post(self, request):
+        logout(request)
+        return redirect("test_analytics_login")
+
+    def get(self, request):
+        logout(request)
+        return redirect("test_analytics_login")

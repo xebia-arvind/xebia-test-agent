@@ -60,6 +60,7 @@ async function createJob(backendUrl, globalBaseUrl, globalCreatedBy, job) {
     base_url: job.base_url || globalBaseUrl || "http://localhost:3000",
     intent_hints: job.intent_hints || [],
     created_by: job.created_by || globalCreatedBy || "manual-file-runner",
+    manual_scenarios: Array.isArray(job.scenarios) ? job.scenarios : [],
   };
 
   const createUrl = `${backendUrl.replace(/\/$/, "")}/test-generation/jobs/`;

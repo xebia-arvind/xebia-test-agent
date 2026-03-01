@@ -53,6 +53,12 @@
       font-size: 14px;
     }
 
+    .top-actions {
+      margin-top: 12px;
+      display: flex;
+      justify-content: flex-end;
+    }
+
     .filters {
       margin-top: 14px;
       display: grid;
@@ -106,6 +112,40 @@
       grid-template-columns: repeat(6, minmax(0, 1fr));
       gap: 10px;
     }
+    
+    .tabs {
+      margin-top: 14px;
+      display: inline-flex;
+      background: #e2e8f0;
+      border: 1px solid #cbd5e1;
+      border-radius: 10px;
+      padding: 4px;
+      gap: 4px;
+    }
+
+    .tab-btn {
+      background: transparent;
+      color: #0f172a;
+      border: 0;
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .tab-btn.active {
+      background: #1d4ed8;
+      color: #ffffff;
+      box-shadow: 0 2px 8px rgba(29, 78, 216, 0.35);
+    }
+
+    .tab-panel {
+      display: none;
+    }
+
+    .tab-panel.active {
+      display: block;
+    }
 
     .kpi {
       background: var(--card);
@@ -135,6 +175,21 @@
       display: grid;
       grid-template-columns: 1.1fr 1fr;
       gap: 12px;
+    }
+
+    .content-healer {
+      grid-template-columns: 1.2fr 0.8fr;
+      align-items: start;
+    }
+
+    .stack {
+      display: grid;
+      gap: 12px;
+    }
+
+    .content-jobs {
+      grid-template-columns: 1.2fr 0.8fr;
+      align-items: start;
     }
 
     .card {
@@ -304,11 +359,144 @@
       color: #64748b;
     }
 
+    .jobs-table td, .jobs-table th {
+      font-size: 12px;
+      padding: 7px 6px;
+    }
+
+    .job-detail-head {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .job-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin: 10px 0 6px;
+    }
+
+    .btn-secondary {
+      background: #dbeafe;
+      color: #1e3a8a;
+      border: 1px solid #93c5fd;
+    }
+
+    .btn-danger {
+      background: #fee2e2;
+      color: #991b1b;
+      border: 1px solid #fecaca;
+    }
+
+    .scenario-list, .artifact-list {
+      max-height: 220px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fafc;
+      padding: 8px;
+      margin-top: 8px;
+    }
+
+    .scenario-row, .artifact-row {
+      padding: 7px 6px;
+      border-bottom: 1px solid #e2e8f0;
+      font-size: 12px;
+    }
+
+    .scenario-row:last-child, .artifact-row:last-child {
+      border-bottom: 0;
+    }
+
+    .artifact-actions {
+      margin-top: 5px;
+      display: flex;
+      gap: 6px;
+    }
+
+    .modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.55);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      padding: 14px;
+    }
+
+    .modal.show {
+      display: flex;
+    }
+
+    .modal-card {
+      width: min(1100px, 96vw);
+      max-height: 88vh;
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      border-radius: 12px;
+      box-shadow: 0 24px 48px rgba(2, 6, 23, 0.35);
+      display: grid;
+      grid-template-rows: auto 1fr;
+      overflow: hidden;
+    }
+
+    .modal-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 12px;
+      border-bottom: 1px solid #e2e8f0;
+      background: #f8fafc;
+    }
+
+    .modal-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #0f172a;
+    }
+
+    .modal-body {
+      padding: 10px 12px;
+      overflow: auto;
+    }
+
+    .modal-body textarea {
+      width: 100%;
+      min-height: 56vh;
+      margin: 0;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 12px;
+      line-height: 1.45;
+      font-family: Menlo, Monaco, monospace;
+      resize: vertical;
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-top: 8px;
+    }
+
+    .modal-status {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
     @media (max-width: 1080px) {
       .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .content { grid-template-columns: 1fr; }
+      .content-healer { grid-template-columns: 1fr; }
       .filters { grid-template-columns: 1fr 1fr; }
       .detail-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .job-detail-head { grid-template-columns: 1fr; }
     }
 
     @media (max-width: 720px) {
@@ -322,7 +510,21 @@
     <section class="top">
       <h1>Playwright Failure Analytics Dashboard</h1>
       <p>Track run quality, healing accuracy, and root causes from your saved test data.</p>
+      <div class="top-actions">
+        <form method="post" action="{% url 'test_analytics_logout' %}">
+          {% csrf_token %}
+          <button type="submit" class="btn-outline">Logout</button>
+        </form>
+      </div>
 
+    </section>
+
+    <section class="tabs">
+      <button type="button" id="tabHealer" class="tab-btn active">Healer</button>
+      <button type="button" id="tabJobs" class="tab-btn">Jobs</button>
+    </section>
+
+    <section id="healerPanel" class="tab-panel active">
       <form id="filterForm" class="filters">
         <div class="field">
           <label for="runId">Run</label>
@@ -356,123 +558,201 @@
           <button type="button" class="btn-outline" id="clearBtn">Clear</button>
         </div>
       </form>
-    </section>
 
-    <section class="kpis">
-      <article class="kpi"><div class="label">Total Tests</div><div class="value" id="kTotal">0</div></article>
-      <article class="kpi ok"><div class="label">Passed</div><div class="value" id="kPassed">0</div></article>
-      <article class="kpi bad"><div class="label">Failed</div><div class="value" id="kFailed">0</div></article>
-      <article class="kpi warn"><div class="label">Healing Attempted</div><div class="value" id="kAttempted">0</div></article>
-      <article class="kpi ok"><div class="label">Healing Success</div><div class="value" id="kHealSuccess">0</div></article>
-      <article class="kpi bad"><div class="label">False Positive</div><div class="value" id="kFalsePos">0</div></article>
-      <article class="kpi ok"><div class="label">Cache Hits</div><div class="value" id="kCacheHits">0</div></article>
-      <article class="kpi warn"><div class="label">Cache Misses</div><div class="value" id="kCacheMisses">0</div></article>
-      <article class="kpi bad"><div class="label">Cache Fallback</div><div class="value" id="kCacheFallback">0</div></article>
-      <article class="kpi"><div class="label">Generation Jobs</div><div class="value" id="kGenJobs">0</div></article>
-      <article class="kpi ok"><div class="label">Generated Pass Rate %</div><div class="value" id="kGenPassRate">0</div></article>
-      <article class="kpi warn"><div class="label">Materialized Ratio %</div><div class="value" id="kGenMaterializeRate">0</div></article>
-    </section>
+      <section class="kpis">
+        <article class="kpi"><div class="label">Total Tests</div><div class="value" id="kTotal">0</div></article>
+        <article class="kpi ok"><div class="label">Passed</div><div class="value" id="kPassed">0</div></article>
+        <article class="kpi bad"><div class="label">Failed</div><div class="value" id="kFailed">0</div></article>
+        <article class="kpi warn"><div class="label">Healing Attempted</div><div class="value" id="kAttempted">0</div></article>
+        <article class="kpi ok"><div class="label">Healing Success</div><div class="value" id="kHealSuccess">0</div></article>
+        <article class="kpi bad"><div class="label">False Positive</div><div class="value" id="kFalsePos">0</div></article>
+        <article class="kpi ok"><div class="label">Cache Hits</div><div class="value" id="kCacheHits">0</div></article>
+        <article class="kpi warn"><div class="label">Cache Misses</div><div class="value" id="kCacheMisses">0</div></article>
+        <article class="kpi bad"><div class="label">Cache Fallback</div><div class="value" id="kCacheFallback">0</div></article>
+      </section>
 
-    <section class="content">
-      <article class="card">
-        <h2>Failure Category Breakdown</h2>
-        <div id="failureChart"></div>
-      </article>
-
-      <article class="card">
-        <h2>Healing Outcome Breakdown</h2>
-        <div id="healingChart"></div>
-      </article>
-
-      <article class="card">
-        <h2>History Assist Impact</h2>
-        <div class="muted" id="historyMeta"></div>
-        <div id="historyChart" style="margin-top:8px;"></div>
-      </article>
-
-      <article class="card">
-        <h2>Top Failed Selectors</h2>
-        <div id="selectorChart"></div>
-      </article>
-
-      <article class="card">
-        <h2>Generation Jobs</h2>
-        <div class="muted" id="generationMeta"></div>
-        <div id="generationChart" style="margin-top:8px;"></div>
-      </article>
-
-      <article class="card">
-        <h2>Recent Failures</h2>
-        <div class="data-box">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Test</th>
-                <th>Failure</th>
-                <th>Healing</th>
-                <th>Validation</th>
-                <th>UI Change</th>
-                <th>History Assist</th>
-                <th>History Hits</th>
-                <th>Confidence</th>
-                <th>Run</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody id="recentFailuresBody"></tbody>
-          </table>
-        </div>
-        <div class="details" id="detailPanel" style="display:none;">
-          <h2>Test Result Timeline</h2>
-          <div class="muted" id="detailMeta"></div>
-          <div class="detail-kpis">
-            <div class="detail-kpi"><div class="label">Failure Category</div><div class="value" id="dFailureCategory">NA</div></div>
-            <div class="detail-kpi"><div class="label">Healing Outcome</div><div class="value" id="dHealingOutcome">NA</div></div>
-            <div class="detail-kpi"><div class="label">Validation</div><div class="value" id="dValidationStatus">NA</div></div>
-            <div class="detail-kpi"><div class="label">UI Change</div><div class="value" id="dUiChange">NA</div></div>
-            <div class="detail-kpi"><div class="label">History / Hits</div><div class="value" id="dHistory">NA</div></div>
-          </div>
-          <div class="detail-kpis">
-            <div class="detail-kpi"><div class="label">Failed Selector</div><div class="value mono" id="dFailedSelector">NA</div></div>
-            <div class="detail-kpi"><div class="label">Healed Selector</div><div class="value mono" id="dHealedSelector">NA</div></div>
-            <div class="detail-kpi"><div class="label">Confidence</div><div class="value mono" id="dConfidence">NA</div></div>
-            <div class="detail-kpi"><div class="label">Root Cause</div><div class="value" id="dRootCause">NA</div></div>
-            <div class="detail-kpi"><div class="label">Error Summary</div><div class="value" id="dErrorSummary">NA</div></div>
-          </div>
+      <section class="content content-healer">
+        <article class="card">
+          <h2>Recent Failures</h2>
           <div class="data-box">
-            <table class="timeline-table">
+            <table>
               <thead>
                 <tr>
-                  <th>#</th>
-                  <th>Time</th>
-                  <th>Step</th>
-                  <th>Type</th>
-                  <th>Status</th>
-                  <th>Selector</th>
-                  <th>Healed Selector</th>
-                  <th>Message</th>
+                  <th>ID</th>
+                  <th>Test</th>
+                  <th>Failure</th>
+                  <th>Healing</th>
+                  <th>Validation</th>
+                  <th>UI Change</th>
+                  <th>History Assist</th>
+                  <th>History Hits</th>
+                  <th>Confidence</th>
+                  <th>Run</th>
+                  <th></th>
                 </tr>
               </thead>
-              <tbody id="detailStepsBody"></tbody>
+              <tbody id="recentFailuresBody"></tbody>
             </table>
           </div>
-          <button type="button" class="raw-toggle" id="rawToggleBtn">Show Raw JSON</button>
-          <pre id="detailJson" class="raw-json"></pre>
+          <div class="details" id="detailPanel" style="display:none;">
+            <h2>Test Result Timeline</h2>
+            <div class="muted" id="detailMeta"></div>
+            <div class="detail-kpis">
+              <div class="detail-kpi"><div class="label">Failure Category</div><div class="value" id="dFailureCategory">NA</div></div>
+              <div class="detail-kpi"><div class="label">Healing Outcome</div><div class="value" id="dHealingOutcome">NA</div></div>
+              <div class="detail-kpi"><div class="label">Validation</div><div class="value" id="dValidationStatus">NA</div></div>
+              <div class="detail-kpi"><div class="label">UI Change</div><div class="value" id="dUiChange">NA</div></div>
+              <div class="detail-kpi"><div class="label">History / Hits</div><div class="value" id="dHistory">NA</div></div>
+            </div>
+            <div class="detail-kpis">
+              <div class="detail-kpi"><div class="label">Failed Selector</div><div class="value mono" id="dFailedSelector">NA</div></div>
+              <div class="detail-kpi"><div class="label">Healed Selector</div><div class="value mono" id="dHealedSelector">NA</div></div>
+              <div class="detail-kpi"><div class="label">Confidence</div><div class="value mono" id="dConfidence">NA</div></div>
+              <div class="detail-kpi"><div class="label">Root Cause</div><div class="value" id="dRootCause">NA</div></div>
+              <div class="detail-kpi"><div class="label">Error Summary</div><div class="value" id="dErrorSummary">NA</div></div>
+            </div>
+            <div class="data-box">
+              <table class="timeline-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Time</th>
+                    <th>Step</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th>Selector</th>
+                    <th>Healed Selector</th>
+                    <th>Message</th>
+                  </tr>
+                </thead>
+                <tbody id="detailStepsBody"></tbody>
+              </table>
+            </div>
+            <button type="button" class="raw-toggle" id="rawToggleBtn">Show Raw JSON</button>
+            <pre id="detailJson" class="raw-json"></pre>
+          </div>
+        </article>
+
+        <div class="stack">
+          <article class="card">
+            <h2>Failure Category Breakdown</h2>
+            <div id="failureChart"></div>
+          </article>
+
+          <article class="card">
+            <h2>Healing Outcome Breakdown</h2>
+            <div id="healingChart"></div>
+          </article>
+
+          <article class="card">
+            <h2>History Assist Impact</h2>
+            <div class="muted" id="historyMeta"></div>
+            <div id="historyChart" style="margin-top:8px;"></div>
+          </article>
+
+          <article class="card">
+            <h2>Top Failed Selectors</h2>
+            <div id="selectorChart"></div>
+          </article>
         </div>
-      </article>
+      </section>
     </section>
+
+    <section id="jobsPanel" class="tab-panel">
+      <section class="kpis">
+        <article class="kpi"><div class="label">Generation Jobs</div><div class="value" id="kGenJobs">0</div></article>
+        <article class="kpi ok"><div class="label">Generated Pass Rate %</div><div class="value" id="kGenPassRate">0</div></article>
+        <article class="kpi warn"><div class="label">Materialized Ratio %</div><div class="value" id="kGenMaterializeRate">0</div></article>
+      </section>
+
+      <section class="content content-jobs">
+        <div class="stack">
+          <article class="card">
+            <h2>Recent Jobs</h2>
+            <div class="data-box">
+              <table class="jobs-table">
+                <thead>
+                  <tr>
+                    <th>Job</th>
+                    <th>Feature</th>
+                    <th>Status</th>
+                    <th>Artifacts</th>
+                    <th>Created</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="jobsTableBody"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="card">
+            <h2>Job Detail</h2>
+            <div id="jobDetailEmpty" class="empty">Select a job to inspect artifacts and take action.</div>
+            <div id="jobDetailPanel" style="display:none;">
+              <div class="job-detail-head">
+                <div class="detail-kpi"><div class="label">Job ID</div><div class="value mono" id="jdJobId">NA</div></div>
+                <div class="detail-kpi"><div class="label">Status</div><div class="value" id="jdStatus">NA</div></div>
+                <div class="detail-kpi"><div class="label">Feature</div><div class="value" id="jdFeature">NA</div></div>
+                <div class="detail-kpi"><div class="label">Approved By</div><div class="value" id="jdApprovedBy">NA</div></div>
+              </div>
+
+              <div class="job-actions">
+                <button type="button" class="btn-primary" id="approveJobBtn">Approve Selected Scenarios</button>
+                <button type="button" class="btn-secondary" id="materializeJobBtn">Materialize</button>
+                <button type="button" class="btn-danger" id="refreshJobBtn">Refresh Detail</button>
+              </div>
+              <div class="muted" id="jobActionMsg"></div>
+
+              <h3 style="margin:10px 0 6px; font-size:14px;">Scenarios (select for approval)</h3>
+              <div class="scenario-list" id="jobScenarioList"></div>
+
+              <h3 style="margin:10px 0 6px; font-size:14px;">Artifacts (validation)</h3>
+              <div class="artifact-list" id="jobArtifactList"></div>
+            </div>
+          </article>
+        </div>
+
+        <article class="card">
+          <h2>Generation Jobs</h2>
+          <div class="muted" id="generationMeta"></div>
+          <div id="generationChart" style="margin-top:8px;"></div>
+        </article>
+      </section>
+    </section>
+  </div>
+
+  <div id="artifactModal" class="modal" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="artifactModalTitle">
+      <div class="modal-head">
+        <div id="artifactModalTitle" class="modal-title">Artifact Preview</div>
+        <button type="button" id="artifactModalCloseBtn" class="btn-danger">Close</button>
+      </div>
+      <div class="modal-body">
+        <textarea id="artifactModalEditor" spellcheck="false"></textarea>
+        <div class="modal-actions">
+          <div id="artifactModalStatus" class="modal-status"></div>
+          <button type="button" id="artifactModalSaveBtn" class="btn-primary">Save Artifact</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script>
     const summaryApiBase = "{% url 'test_analytics_summary' %}";
     const detailApiTemplate = "{% url 'test_result_detail' 1 %}";
+    const generationJobBase = "{% url 'generation_job_create' %}";
+    const dashboardLoginUrl = "{% url 'test_analytics_login' %}";
 
     const filterForm = document.getElementById("filterForm");
     const clearBtn = document.getElementById("clearBtn");
     const runIdInput = document.getElementById("runId");
     const buildIdInput = document.getElementById("buildId");
     const environmentInput = document.getElementById("environment");
+    const tabHealer = document.getElementById("tabHealer");
+    const tabJobs = document.getElementById("tabJobs");
+    const healerPanel = document.getElementById("healerPanel");
+    const jobsPanel = document.getElementById("jobsPanel");
 
     const kTotal = document.getElementById("kTotal");
     const kPassed = document.getElementById("kPassed");
@@ -510,6 +790,36 @@
     const dConfidence = document.getElementById("dConfidence");
     const dRootCause = document.getElementById("dRootCause");
     const dErrorSummary = document.getElementById("dErrorSummary");
+    const jobsTableBody = document.getElementById("jobsTableBody");
+    const jobDetailEmpty = document.getElementById("jobDetailEmpty");
+    const jobDetailPanel = document.getElementById("jobDetailPanel");
+    const jdJobId = document.getElementById("jdJobId");
+    const jdStatus = document.getElementById("jdStatus");
+    const jdFeature = document.getElementById("jdFeature");
+    const jdApprovedBy = document.getElementById("jdApprovedBy");
+    const jobScenarioList = document.getElementById("jobScenarioList");
+    const jobArtifactList = document.getElementById("jobArtifactList");
+    const approveJobBtn = document.getElementById("approveJobBtn");
+    const materializeJobBtn = document.getElementById("materializeJobBtn");
+    const refreshJobBtn = document.getElementById("refreshJobBtn");
+    const jobActionMsg = document.getElementById("jobActionMsg");
+    const artifactModal = document.getElementById("artifactModal");
+    const artifactModalTitle = document.getElementById("artifactModalTitle");
+    const artifactModalEditor = document.getElementById("artifactModalEditor");
+    const artifactModalStatus = document.getElementById("artifactModalStatus");
+    const artifactModalSaveBtn = document.getElementById("artifactModalSaveBtn");
+    const artifactModalCloseBtn = document.getElementById("artifactModalCloseBtn");
+    let activeTab = "healer";
+    let jobsCache = [];
+    let selectedJobId = "";
+    let selectedJobDetail = null;
+    let selectedArtifactContent = "";
+    let selectedArtifactPath = "";
+
+    function getCsrfToken() {
+      const match = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+      return match ? decodeURIComponent(match[1]) : "";
+    }
 
     function escaped(value) {
       return String(value ?? "").replace(/[&<>'"]/g, (char) => {
@@ -526,6 +836,21 @@
 
       const query = params.toString();
       return query ? `${summaryApiBase}?${query}` : summaryApiBase;
+    }
+
+    function setActiveTab(tabName, syncUrl = true) {
+      activeTab = tabName === "jobs" ? "jobs" : "healer";
+      const healerActive = activeTab === "healer";
+      tabHealer.classList.toggle("active", healerActive);
+      tabJobs.classList.toggle("active", !healerActive);
+      healerPanel.classList.toggle("active", healerActive);
+      jobsPanel.classList.toggle("active", !healerActive);
+      if (syncUrl) syncFiltersToUrl();
+    }
+
+    function redirectToDashboardLogin() {
+      const next = `${window.location.pathname}${window.location.search}`;
+      window.location.href = `${dashboardLoginUrl}?next=${encodeURIComponent(next)}`;
     }
 
     function renderBars(container, rows, keyLabel, keyCount, color) {
@@ -644,11 +969,223 @@
       );
     }
 
+    function renderJobsTable(items) {
+      const rows = Array.isArray(items) ? items : [];
+      if (!rows.length) {
+        jobsTableBody.innerHTML = '<tr><td colspan="6" class="muted">No generation jobs found.</td></tr>';
+        return;
+      }
+      jobsTableBody.innerHTML = rows.map((job) => {
+        const total = Number(job.total_artifacts || 0);
+        const valid = Number(job.valid_artifacts || 0);
+        const invalid = Number(job.invalid_artifacts || 0);
+        const createdOn = job.created_on ? new Date(job.created_on).toLocaleString() : "NA";
+        return `
+          <tr>
+            <td class="mono">${escaped((job.job_id || "").slice(0, 8))}</td>
+            <td>${escaped(job.feature_name || "NA")}</td>
+            <td><span class="badge warn">${escaped(job.job_status || "NA")}</span></td>
+            <td class="mono">${valid}/${total} valid (${invalid} invalid)</td>
+            <td class="mono">${escaped(createdOn)}</td>
+            <td><button type="button" class="btn-primary" data-job-id="${escaped(job.job_id || "")}">View</button></td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    function renderJobDetail(job) {
+      selectedJobDetail = job || null;
+      if (!job) {
+        jobDetailPanel.style.display = "none";
+        jobDetailEmpty.style.display = "block";
+        closeArtifactModal();
+        return;
+      }
+      jobDetailEmpty.style.display = "none";
+      jobDetailPanel.style.display = "block";
+      jdJobId.textContent = job.job_id || "NA";
+      jdStatus.textContent = job.status || "NA";
+      jdFeature.textContent = job.feature_name || "NA";
+      jdApprovedBy.textContent = job.approved_by || "NA";
+      const statusValue = String(job.status || "").toUpperCase();
+      approveJobBtn.disabled = !(statusValue === "DRAFT_READY" || statusValue === "APPROVED");
+      materializeJobBtn.disabled = !(statusValue === "APPROVED" || statusValue === "MATERIALIZED");
+
+      const scenarios = Array.isArray(job.scenarios) ? job.scenarios : [];
+      if (!scenarios.length) {
+        jobScenarioList.innerHTML = '<div class="muted">No scenarios found.</div>';
+      } else {
+        jobScenarioList.innerHTML = scenarios.map((s) => `
+          <label class="scenario-row">
+            <input type="checkbox" data-scenario-id="${escaped(s.scenario_id || "")}" ${s.selected_for_materialization ? "checked" : ""} />
+            <span style="margin-left:6px;"><strong>${escaped(s.title || "Scenario")}</strong> [${escaped(s.scenario_type || "NA")}]</span>
+          </label>
+        `).join("");
+      }
+
+      const artifacts = Array.isArray(job.artifacts) ? job.artifacts : [];
+      if (!artifacts.length) {
+        jobArtifactList.innerHTML = '<div class="muted">No artifacts found.</div>';
+        closeArtifactModal();
+      } else {
+        jobArtifactList.innerHTML = artifacts.map((a, idx) => `
+          <div class="artifact-row">
+            <div><strong>${escaped(a.relative_path || "NA")}</strong></div>
+            <div class="mono">type=${escaped(a.artifact_type || "NA")} | status=${escaped(a.validation_status || "NA")}</div>
+            <div class="mono">errors=${escaped((a.validation_errors || []).join(" | ") || "none")}</div>
+            <div class="mono">warnings=${escaped((a.warnings || []).join(" | ") || "none")}</div>
+            <div class="artifact-actions">
+              <button type="button" class="btn-secondary" data-artifact-index="${idx}">Preview</button>
+            </div>
+          </div>
+        `).join("");
+        closeArtifactModal();
+      }
+    }
+
+    async function loadJobDetail(jobId) {
+      selectedJobId = jobId || "";
+      if (!selectedJobId) return;
+      jobActionMsg.textContent = "";
+      const detailUrl = `${generationJobBase}${selectedJobId}/`;
+      const resp = await fetch(detailUrl);
+      if (resp.status === 401 || resp.status === 403) {
+        redirectToDashboardLogin();
+        return;
+      }
+      if (!resp.ok) throw new Error(`Job detail API failed: ${resp.status}`);
+      const data = await resp.json();
+      renderJobDetail(data);
+    }
+
+    function previewArtifactByIndex(indexValue) {
+      const idx = Number(indexValue);
+      const artifacts = Array.isArray(selectedJobDetail?.artifacts) ? selectedJobDetail.artifacts : [];
+      if (!Number.isInteger(idx) || idx < 0 || idx >= artifacts.length) return;
+      const artifact = artifacts[idx] || {};
+      const content = String(artifact.content_final || artifact.content_draft || "");
+      selectedArtifactPath = String(artifact.relative_path || "");
+      selectedArtifactContent = content || "// No artifact content available";
+      openArtifactModal(artifact.relative_path || "Artifact Preview", selectedArtifactContent);
+    }
+
+    function openArtifactModal(title, content) {
+      artifactModalTitle.textContent = title || "Artifact Preview";
+      artifactModalEditor.value = String(content || "// No artifact content available");
+      artifactModalStatus.textContent = "";
+      artifactModal.classList.add("show");
+      artifactModal.setAttribute("aria-hidden", "false");
+    }
+
+    function closeArtifactModal() {
+      artifactModal.classList.remove("show");
+      artifactModal.setAttribute("aria-hidden", "true");
+      artifactModalStatus.textContent = "";
+    }
+
+    async function saveArtifactEdits() {
+      if (!selectedJobId || !selectedArtifactPath) return;
+      const payload = {
+        relative_path: selectedArtifactPath,
+        content: String(artifactModalEditor.value || ""),
+        update_draft: true,
+      };
+      artifactModalSaveBtn.disabled = true;
+      artifactModalStatus.textContent = "Saving...";
+      const resp = await fetch(`${generationJobBase}${selectedJobId}/artifacts/update/`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": getCsrfToken(),
+        },
+        body: JSON.stringify(payload),
+      });
+      artifactModalSaveBtn.disabled = false;
+      if (resp.status === 401 || resp.status === 403) {
+        redirectToDashboardLogin();
+        return;
+      }
+      const body = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(body.error || `Artifact save failed: ${resp.status}`);
+      }
+      const statusText = body?.artifact?.validation_status || "UPDATED";
+      artifactModalStatus.textContent = `Saved. Validation status: ${statusText}`;
+      jobActionMsg.textContent = `Artifact saved: ${selectedArtifactPath}`;
+      await loadSummary();
+      await loadJobDetail(selectedJobId);
+    }
+
+    function selectedScenarioIds() {
+      const boxes = Array.from(jobScenarioList.querySelectorAll('input[type="checkbox"][data-scenario-id]'));
+      return boxes.filter((x) => x.checked).map((x) => x.getAttribute("data-scenario-id")).filter(Boolean);
+    }
+
+    async function approveSelectedJob() {
+      if (!selectedJobId) return;
+      const approvedBy = window.prompt("Approved by (required):", "dashboard-user");
+      if (!approvedBy || !approvedBy.trim()) {
+        jobActionMsg.textContent = "Approval cancelled: approved_by is required.";
+        return;
+      }
+      const include = selectedScenarioIds();
+      const payload = {
+        approved_by: approvedBy.trim(),
+        notes: "Approved from analytics dashboard",
+        include_scenario_ids: include,
+      };
+      const resp = await fetch(`${generationJobBase}${selectedJobId}/approve/`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": getCsrfToken(),
+        },
+        body: JSON.stringify(payload),
+      });
+      if (resp.status === 401 || resp.status === 403) {
+        redirectToDashboardLogin();
+        return;
+      }
+      const body = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(body.error || `Approve failed: ${resp.status}`);
+      }
+      jobActionMsg.textContent = `Approval successful. Status: ${body.status || "UPDATED"}`;
+      await loadSummary();
+      await loadJobDetail(selectedJobId);
+    }
+
+    async function materializeSelectedJob() {
+      if (!selectedJobId) return;
+      const allowOverwrite = window.confirm("Allow overwrite if files already exist?");
+      const resp = await fetch(`${generationJobBase}${selectedJobId}/materialize/`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": getCsrfToken(),
+        },
+        body: JSON.stringify({ allow_overwrite: allowOverwrite }),
+      });
+      if (resp.status === 401 || resp.status === 403) {
+        redirectToDashboardLogin();
+        return;
+      }
+      const body = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(body.error || `Materialize failed: ${resp.status}`);
+      }
+      const written = Array.isArray(body.written_files) ? body.written_files.length : 0;
+      jobActionMsg.textContent = `Materialization successful. Files written: ${written}`;
+      await loadSummary();
+      await loadJobDetail(selectedJobId);
+    }
+
     function syncFiltersToUrl() {
       const params = new URLSearchParams();
       if (runIdInput.value.trim()) params.set("run_id", runIdInput.value.trim());
       if (buildIdInput.value.trim()) params.set("build_id", buildIdInput.value.trim());
       if (environmentInput.value.trim()) params.set("environment", environmentInput.value.trim());
+      params.set("tab", activeTab);
 
       const next = params.toString() ? `${window.location.pathname}?${params.toString()}` : window.location.pathname;
       window.history.replaceState({}, "", next);
@@ -687,17 +1224,26 @@
 
     async function loadSummary() {
       detailPanel.style.display = "none";
+      const fetchJson = async (url, label) => {
+        const resp = await fetch(url);
+        if (resp.status === 401 || resp.status === 403) {
+          redirectToDashboardLogin();
+          throw new Error("Unauthorized");
+        }
+        if (!resp.ok) throw new Error(`${label} failed: ${resp.status}`);
+        return resp.json();
+      };
 
-      try {
-        const resp = await fetch(buildSummaryUrl());
-        if (!resp.ok) throw new Error(`Summary API failed: ${resp.status}`);
+      const [healerResult, jobsResult] = await Promise.allSettled([
+        fetchJson(buildSummaryUrl(), "Healer summary API"),
+        fetchJson(summaryApiBase, "Jobs summary API"),
+      ]);
 
-        const data = await resp.json();
+      if (healerResult.status === "fulfilled") {
+        const data = healerResult.value || {};
         const totals = data.totals || {};
         const healing = data.healing_summary || {};
         const cache = data.cache_summary || {};
-        const generation = data.generation_summary || {};
-        const generatedResults = generation.generated_test_results || {};
 
         kTotal.textContent = totals.total_tests ?? 0;
         kPassed.textContent = totals.passed ?? 0;
@@ -708,35 +1254,52 @@
         kCacheHits.textContent = cache.cache_hits ?? 0;
         kCacheMisses.textContent = cache.cache_misses ?? 0;
         kCacheFallback.textContent = cache.cache_fallback_to_fresh ?? 0;
-        kGenJobs.textContent = generation.total_jobs ?? 0;
-        kGenPassRate.textContent = Number(generatedResults.pass_rate ?? 0).toFixed(2);
-        kGenMaterializeRate.textContent = Number(generation.materialization_ratio ?? 0).toFixed(2);
 
         renderBars(failureChart, data.failure_breakdown || [], "failure_category", "count", "red");
         renderHealingSummary(healing);
         renderHistorySummary(data.history_summary || {});
-        renderGenerationSummary(generation);
         renderBars(selectorChart, data.top_failed_selectors || [], "failed_selector", "count", "blue");
         renderRecentFailures(data.recent_failures || []);
-
-        syncFiltersToUrl();
-      } catch (error) {
-        const html = `<div class="empty">Failed to load summary: ${escaped(error.message)}</div>`;
+      } else {
+        const error = healerResult.reason || new Error("Unknown healer summary error");
+        const html = `<div class="empty">Failed to load healer summary: ${escaped(error.message)}</div>`;
         failureChart.innerHTML = html;
         healingChart.innerHTML = html;
         historyChart.innerHTML = html;
         historyMeta.textContent = "Failed to load history metrics.";
-        generationChart.innerHTML = html;
-        generationMeta.textContent = "Failed to load generation metrics.";
         selectorChart.innerHTML = html;
         recentFailuresBody.innerHTML = '<tr><td colspan="11" class="muted">Could not load failures.</td></tr>';
       }
+
+      if (jobsResult.status === "fulfilled") {
+        const jobsData = jobsResult.value || {};
+        const generation = jobsData.generation_summary || {};
+        const generatedResults = generation.generated_test_results || {};
+        jobsCache = generation.recent_jobs || [];
+        kGenJobs.textContent = generation.total_jobs ?? 0;
+        kGenPassRate.textContent = Number(generatedResults.pass_rate ?? 0).toFixed(2);
+        kGenMaterializeRate.textContent = Number(generation.materialization_ratio ?? 0).toFixed(2);
+        renderGenerationSummary(generation);
+        renderJobsTable(jobsCache);
+      } else {
+        const error = jobsResult.reason || new Error("Unknown jobs summary error");
+        const html = `<div class="empty">Failed to load jobs summary: ${escaped(error.message)}</div>`;
+        generationChart.innerHTML = html;
+        generationMeta.textContent = "Failed to load generation metrics.";
+        jobsTableBody.innerHTML = '<tr><td colspan="6" class="muted">Could not load jobs.</td></tr>';
+      }
+
+      syncFiltersToUrl();
     }
 
     async function loadDetail(id) {
       try {
         const detailUrl = detailApiTemplate.replace("/1/", `/${id}/`);
         const resp = await fetch(detailUrl);
+        if (resp.status === 401 || resp.status === 403) {
+          redirectToDashboardLogin();
+          return;
+        }
         if (!resp.ok) throw new Error(`Detail API failed: ${resp.status}`);
 
         const detail = await resp.json();
@@ -821,6 +1384,71 @@
       detailJson.style.display = isHidden ? "block" : "none";
       rawToggleBtn.textContent = isHidden ? "Hide Raw JSON" : "Show Raw JSON";
     });
+
+    tabHealer.addEventListener("click", () => setActiveTab("healer"));
+    tabJobs.addEventListener("click", () => setActiveTab("jobs"));
+    jobsTableBody.addEventListener("click", async (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLButtonElement)) return;
+      const jobId = target.getAttribute("data-job-id");
+      if (!jobId) return;
+      try {
+        await loadJobDetail(jobId);
+      } catch (error) {
+        jobActionMsg.textContent = `Failed to load job detail: ${error.message}`;
+        jobDetailPanel.style.display = "none";
+        jobDetailEmpty.style.display = "block";
+        jobDetailEmpty.textContent = `Failed to load job detail: ${error.message}`;
+      }
+    });
+    jobArtifactList.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLButtonElement)) return;
+      const idx = target.getAttribute("data-artifact-index");
+      if (idx == null) return;
+      previewArtifactByIndex(idx);
+    });
+    artifactModalCloseBtn.addEventListener("click", closeArtifactModal);
+    artifactModal.addEventListener("click", (event) => {
+      if (event.target === artifactModal) closeArtifactModal();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && artifactModal.classList.contains("show")) {
+        closeArtifactModal();
+      }
+    });
+    artifactModalSaveBtn.addEventListener("click", async () => {
+      try {
+        await saveArtifactEdits();
+      } catch (error) {
+        artifactModalStatus.textContent = `Save failed: ${error.message}`;
+      }
+    });
+    approveJobBtn.addEventListener("click", async () => {
+      try {
+        await approveSelectedJob();
+      } catch (error) {
+        jobActionMsg.textContent = `Approve failed: ${error.message}`;
+      }
+    });
+    materializeJobBtn.addEventListener("click", async () => {
+      try {
+        await materializeSelectedJob();
+      } catch (error) {
+        jobActionMsg.textContent = `Materialize failed: ${error.message}`;
+      }
+    });
+    refreshJobBtn.addEventListener("click", async () => {
+      if (!selectedJobId) return;
+      try {
+        await loadJobDetail(selectedJobId);
+      } catch (error) {
+        jobActionMsg.textContent = `Refresh failed: ${error.message}`;
+      }
+    });
+
+    const initTab = new URLSearchParams(window.location.search).get("tab");
+    setActiveTab(initTab === "jobs" ? "jobs" : "healer", false);
 
     loadSummary();
   </script>

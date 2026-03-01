@@ -26,6 +26,7 @@ urlpatterns = [
     path("api/", include("curertestai.urls")),
     path("test-analytics/", include("test_analytics.urls")),
     path("test-generation/", include("test_generation.urls")),
+    path("ui-knowledge/", include("ui_knowledge.urls")),
 ]
 
 # Serve media files in development

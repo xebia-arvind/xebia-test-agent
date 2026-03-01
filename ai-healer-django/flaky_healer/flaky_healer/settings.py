@@ -68,6 +68,7 @@ INSTALLED_APPS = [
     'curertestai',
     'test_analytics',
     'test_generation',
+    'ui_knowledge',
 ]
 X_FRAME_OPTIONS = "SAMEORIGIN"
 SILENCED_SYSTEM_CHECKS = ["security.W019"]
@@ -122,19 +123,19 @@ DATABASES = {
         'HOST':'localhost',
         'PORT':'3306',
     },
-    # NEW PostgreSQL DB
-    "playwright": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": "playwright_artifacts",
-        "USER": "xebia_ai",
-        "PASSWORD": "@xebia_ai",
-        "HOST": "localhost",
-        "PORT": "5432",
-    }
+    # # NEW PostgreSQL DB
+    # "playwright": {
+    #     "ENGINE": "django.db.backends.postgresql",
+    #     "NAME": "playwright_artifacts",
+    #     "USER": "xebia_ai",
+    #     "PASSWORD": "@xebia_ai",
+    #     "HOST": "localhost",
+    #     "PORT": "5432",
+    # }
 }
-DATABASE_ROUTERS = [
-    "test_analytics.db_router.PlaywrightRouter"
-]
+# DATABASE_ROUTERS = [
+#     "test_analytics.db_router.PlaywrightRouter"
+# ]
 
 
 

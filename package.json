@@ -22,7 +22,8 @@
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject",
-    "gen:testcases": "node tests/utils/runGenerationFromFile.mjs"
+    "gen:testcases": "node tests/utils/runGenerationFromFile.mjs",
+    "sync:ui": "node tests/utils/syncUiKnowledge.mjs"
   },
   "eslintConfig": {
     "extends": [

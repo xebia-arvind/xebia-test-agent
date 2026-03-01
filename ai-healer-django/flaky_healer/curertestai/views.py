@@ -26,6 +26,7 @@ from curertestai.fingerprint import (
     generate_dom_fingerprint,
     jaccard_similarity,
 )
+from ui_knowledge.change_detection_service import detect_ui_change_for_healing
 from clients.models import Clients
 from django.contrib.auth import get_user_model
 from django.utils import timezone
@@ -487,6 +488,20 @@ class HealAPIView(APIView):
         page_url = validated_data.get("page_url", "") or ""
         use_of_selector = validated_data.get("use_of_selector", "") or ""
         intent_key = validated_data.get("intent_key", "") or ""
+        failed_selector = validated_data.get("failed_selector", "") or ""
+
+        # Primary signal: ui_knowledge baseline/current diff service.
+        try:
+            ui_change = detect_ui_change_for_healing(
+                page_url=page_url,
+                failed_selector=failed_selector,
+                use_of_selector=use_of_selector,
+            )
+            level = str(ui_change.get("ui_change_level") or "UNKNOWN").upper()
+            if level and level != "UNKNOWN":
+                return level
+        except Exception as exc:
+            logger.debug("ui_knowledge change detection fallback to healer heuristic: %s", str(exc))
 
         base_query = HealerRequest.objects.filter(
             url=page_url,
@@ -500,7 +515,6 @@ class HealAPIView(APIView):
         if not previous:
             previous = base_query.order_by("-created_on").first()
 
-        failed_selector = validated_data.get("failed_selector", "") or ""
         hints = self._extract_selector_hints(failed_selector, use_of_selector)
         if not previous:
             # If selector hints are clearly missing in current DOM, don't keep UNKNOWN.

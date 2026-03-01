@@ -29,6 +29,11 @@ class GenerationJobCreateSerializer(serializers.Serializer):
         default=list,
     )
     created_by = serializers.CharField(required=False, allow_blank=True, default="")
+    manual_scenarios = serializers.ListField(
+        child=serializers.DictField(),
+        required=False,
+        default=list,
+    )
 
 
 class GenerationJobApproveSerializer(serializers.Serializer):
@@ -55,6 +60,12 @@ class GenerationJobMaterializeSerializer(serializers.Serializer):
 class GenerationJobLinkRunSerializer(serializers.Serializer):
     run_id = serializers.CharField(max_length=100)
     notes = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class GenerationJobArtifactUpdateSerializer(serializers.Serializer):
+    relative_path = serializers.CharField(max_length=512)
+    content = serializers.CharField()
+    update_draft = serializers.BooleanField(required=False, default=True)
 
 
 class GenerationScenarioSerializer(serializers.ModelSerializer):

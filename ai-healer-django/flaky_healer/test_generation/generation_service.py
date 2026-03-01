@@ -6,9 +6,9 @@ import re
 import socket
 import subprocess
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
+from urllib.parse import urljoin
 from urllib import request as urllib_request
 from urllib.error import HTTPError, URLError
 
@@ -64,6 +64,10 @@ def _runtime_selector_validation_enabled() -> bool:
     return os.getenv("TEST_GEN_RUNTIME_SELECTOR_VALIDATION", "true").lower() == "true"
 
 
+def _selector_validation_source() -> str:
+    return os.getenv("TEST_GEN_SELECTOR_VALIDATION_SOURCE", "ui_knowledge").strip().lower()
+
+
 def _feature_presence_required() -> bool:
     return os.getenv("TEST_GEN_REQUIRE_FEATURE_PRESENCE", "true").lower() == "true"
 
@@ -73,6 +77,33 @@ def _feature_presence_min_score() -> float:
         return float(os.getenv("TEST_GEN_FEATURE_PRESENCE_MIN_SCORE", "0.40"))
     except ValueError:
         return 0.40
+
+
+def _use_ui_knowledge_source() -> bool:
+    return os.getenv("TEST_GEN_USE_UI_KNOWLEDGE", "true").lower() == "true"
+
+
+def _allow_live_crawl_fallback() -> bool:
+    return os.getenv("TEST_GEN_ALLOW_LIVE_CRAWL_FALLBACK", "false").lower() == "true"
+
+
+def _require_all_artifacts_valid() -> bool:
+    return os.getenv("TEST_GEN_REQUIRE_ALL_ARTIFACTS_VALID", "true").lower() == "true"
+
+
+def _planning_verify_enabled() -> bool:
+    return os.getenv("TEST_GEN_ENABLE_PLANNING_VERIFY", "true").lower() == "true"
+
+
+def _planning_verify_num_predict() -> int:
+    try:
+        return int(os.getenv("TEST_GEN_PLANNING_VERIFY_NUM_PREDICT", "900"))
+    except ValueError:
+        return 900
+
+
+def _respect_manual_scenarios_exactly() -> bool:
+    return os.getenv("TEST_GEN_RESPECT_MANUAL_SCENARIOS", "true").lower() == "true"
 
 
 def _safe_json(value: Any, fallback: Any):
@@ -86,19 +117,16 @@ def _tokenize(text: str) -> List[str]:
     return [t for t in re.split(r"[^a-z0-9]+", (text or "").lower()) if t]
 
 
-@lru_cache(maxsize=1)
 def _available_intent_keys() -> List[str]:
-    config_path = (
-        Path(__file__).resolve().parents[1]
-        / "curertestai"
-        / "config"
-        / "intent_policies.json"
-    )
-    keys = []
+    keys: List[str] = []
     try:
-        payload = json.loads(config_path.read_text(encoding="utf-8"))
-        if isinstance(payload, dict):
-            keys = [str(k).strip().lower() for k in payload.keys() if str(k).strip()]
+        from ui_knowledge.models import UIElement  # lazy import to avoid hard coupling at module import time
+
+        keys = [
+            str(v or "").strip().lower()
+            for v in UIElement.objects.exclude(intent_key__isnull=True).values_list("intent_key", flat=True).distinct()
+            if str(v or "").strip()
+        ]
     except Exception:
         keys = []
     if "generic" not in keys:
@@ -224,6 +252,34 @@ def _collect_interactables(crawl_summary: Dict[str, Any]) -> List[Dict[str, Any]
             )
     return rows
 
+
+def _validate_selectors_from_ui_knowledge(
+    *,
+    selectors: List[str],
+    crawl_summary: Dict[str, Any],
+) -> Dict[str, str]:
+    known: set[str] = set()
+    for route in crawl_summary.get("routes") or []:
+        for node in route.get("interactables") or []:
+            for candidate in _interactable_selector_candidates(node):
+                if candidate:
+                    known.add(str(candidate).strip())
+            raw_hints = node.get("selector_hints") or []
+            for hint in raw_hints:
+                h = str(hint or "").strip()
+                if h:
+                    known.add(h)
+
+    missing_map: Dict[str, str] = {}
+    for selector in selectors:
+        s = str(selector or "").strip()
+        if not s:
+            continue
+        if s in known:
+            continue
+        missing_map[s] = "selector not found in ui_knowledge baseline routes"
+    return missing_map
+
 def _build_selector_map(crawl_summary: Dict[str, Any]) -> Dict[str, str]:
     """
     Compress crawl output into deterministic selector map.
@@ -260,7 +316,15 @@ def _build_selector_map(crawl_summary: Dict[str, Any]) -> Dict[str, str]:
 
 
 
-def _pick_best_selector(crawl_summary: Dict[str, Any], hints: List[str], default_selector: str) -> str:
+def _pick_best_selector(
+    crawl_summary: Dict[str, Any],
+    hints: List[str],
+    default_selector: str,
+    *,
+    action_kind: str = "click",
+    action_text: str = "",
+    fill_target_tokens: List[str] | None = None,
+) -> str:
     rows = _collect_interactables(crawl_summary)[:300]
     if not rows:
         return default_selector
@@ -272,8 +336,12 @@ def _pick_best_selector(crawl_summary: Dict[str, Any], hints: List[str], default
 
     best_score = -1
     best_selector = default_selector
+    action_text_l = (action_text or "").lower()
+    target_tokens = set(t for t in (fill_target_tokens or []) if t)
     for row in rows:
+        route_url = str(row.get("route_url") or "").lower()
         node = row["node"]
+        selector_hints_blob = " ".join(str(h or "") for h in (node.get("selector_hints") or [])[:8])
         blob_parts = [
             str(node.get("text") or ""),
             str(node.get("aria_label") or ""),
@@ -281,57 +349,205 @@ def _pick_best_selector(crawl_summary: Dict[str, Any], hints: List[str], default
             str(node.get("id") or ""),
             str(node.get("role") or ""),
             str(node.get("href") or ""),
+            selector_hints_blob,
         ]
         tokens = set(_tokenize(" ".join(blob_parts)))
         overlap = len(tokens & hint_tokens)
         candidates = _interactable_selector_candidates(node)
         if not candidates:
             continue
+        tag = str(node.get("tag") or "").strip().lower()
+        is_fillable = tag in {"input", "textarea", "select"} or any(
+            re.search(r"\b(input|textarea|select)\b", c) for c in candidates
+        )
+        role = str(node.get("role") or "").strip().lower()
+        node_text = " ".join(
+            [
+                str(node.get("text") or "").lower(),
+                str(node.get("aria_label") or "").lower(),
+                str(node.get("test_id") or "").lower(),
+                str(node.get("href") or "").lower(),
+            ]
+        )
+        is_clickable = (
+            tag in {"button", "a", "summary"}
+            or role in {"button", "link", "menuitem"}
+            or any(re.search(r"\b(button|a\[|href=|role=\"button\"|role=\"link\")", c) for c in candidates)
+        )
+
+        # Route-aware journey signals: improve selector relevance across multi-page flows.
+        if "view details" in action_text_l:
+            if route_url.endswith("/") or route_url.rstrip("/").endswith("localhost:3000"):
+                overlap += 3
+            if "/cart" in route_url:
+                overlap -= 2
+        if "add to cart" in action_text_l:
+            if "/product" in route_url:
+                overlap += 3
+            if "/cart" in route_url:
+                overlap -= 1
+        if ("go to cart" in action_text_l) or ("open cart" in action_text_l):
+            if "/cart" in route_url:
+                overlap += 4
+        if any(k in action_text_l for k in ("coupon", "apply", "enter code")) and "/cart" in route_url:
+            overlap += 3
+
+        if action_kind == "fill":
+            if is_fillable:
+                overlap += 4
+            else:
+                overlap -= 3
+            # Prefer fields whose id/name/label/aria tokens match target field hints (generic across apps).
+            if target_tokens:
+                target_overlap = len(tokens & target_tokens)
+                overlap += target_overlap * 5
+                if target_overlap == 0:
+                    overlap -= 2
+            node_type = str(node.get("type") or "").strip().lower()
+            if "email" in target_tokens and node_type == "email":
+                overlap += 6
+            if any(t in target_tokens for t in {"message", "comment", "description", "details", "note"}):
+                if tag == "textarea":
+                    overlap += 6
+                elif tag == "input":
+                    overlap -= 1
+            if any(k in action_text_l for k in ("code", "coupon", "promo", "discount", "voucher", "enter")):
+                if any(k in tokens for k in ("code", "coupon", "promo", "discount", "voucher", "enter")):
+                    overlap += 2
+        elif action_kind == "click":
+            if is_clickable:
+                overlap += 2
+            else:
+                overlap -= 2
+            if "view details" in action_text_l:
+                if "view details" in node_text or "view" in tokens:
+                    overlap += 4
+                if "apply" in tokens or "apply" in node_text:
+                    overlap -= 4
+            if "apply" in action_text_l and "apply" in tokens:
+                overlap += 3
+                if "apply" in node_text:
+                    overlap += 2
+                # Avoid broad section/container selectors when user explicitly asks to click a button.
+                if tag in {"div", "section", "article", "main"}:
+                    overlap -= 4
+                if "section" in str(node.get("test_id") or "").lower():
+                    overlap -= 3
+            if "button" in action_text_l and tag != "button":
+                overlap -= 2
+            if "add" in action_text_l and "cart" in action_text_l and ("add" in tokens or "cart" in tokens):
+                overlap += 2
+            if "go to cart" in action_text_l or ("go" in action_text_l and "cart" in action_text_l):
+                # Reject container selectors for navigation intent.
+                if "coupon-section" in str(node.get("test_id") or "").lower():
+                    overlap -= 6
+                if "cart" in node_text:
+                    overlap += 3
+                if tag in {"a", "button"}:
+                    overlap += 1
+                if any("/cart" in c.lower() for c in candidates):
+                    overlap += 5
+            if "coupon section" in action_text_l and "apply" in action_text_l:
+                if "apply" in node_text or any("apply" in c.lower() for c in candidates):
+                    overlap += 6
         if overlap > best_score:
             best_score = overlap
             best_selector = candidates[0]
     return best_selector
 
 
-def _render_assertion_lines(scenario: Dict[str, Any], crawl_summary: Dict[str, Any], fallback_selector: str) -> List[str]:
-    assertion_items = scenario.get("assertions") or []
-    if not assertion_items:
-        return ["  await expect(page.locator('body')).toBeVisible();"]
+def _render_single_assertion_plan(
+    assertion_item: Any,
+    crawl_summary: Dict[str, Any],
+    fallback_selector: str,
+) -> Dict[str, List[str]]:
+    strict_lines: List[str] = []
+    fallback_lines: List[str] = []
 
-    lines: List[str] = []
-    for item in assertion_items[:3]:
-        if isinstance(item, dict):
-            a_type = str(item.get("type") or "").strip().lower()
-            target = item.get("target") or {}
-            if a_type == "url_contains":
-                value = str(item.get("value") or target.get("value") or "").strip().replace("/", "\\/")
-                if value:
-                    lines.append(f"  await expect(page).toHaveURL(/{value}/);")
-                    continue
-            if a_type == "visible":
-                strategy = str(target.get("strategy") or "").strip().lower()
-                value = str(target.get("value") or "").strip()
-                if strategy == "testid" and value:
-                    lines.append(f"  await expect(page.locator('[data-testid=\"{value}\"]')).toBeVisible();")
-                    continue
-                if strategy == "selector" and value:
-                    escaped = value.replace("'", "\\'")
-                    lines.append(f"  await expect(page.locator('{escaped}')).toBeVisible();")
-                    continue
-        # string assertion fallback + selector ranking
-        text = str(item).strip()
-        if not text:
-            continue
-        if "url" in text.lower() and "/" in text:
-            path = "/" + text.split("/")[-1].strip()
-            path_regex = path.replace("/", "\\/")
-            lines.append(f"  await expect(page).toHaveURL(/{path_regex}/);")
-            continue
-        selector = _pick_best_selector(crawl_summary, [text], fallback_selector)
-        escaped = selector.replace("'", "\\'")
-        lines.append(f"  await expect(page.locator('{escaped}')).toBeVisible();")
+    if isinstance(assertion_item, dict):
+        a_type = str(assertion_item.get("type") or "").strip().lower()
+        target = assertion_item.get("target") or {}
+        if a_type == "url_contains":
+            value = str(assertion_item.get("value") or target.get("value") or "").strip().replace("/", "\\/")
+            if value:
+                return {"strict": [f"  await expect(page).toHaveURL(/{value}/);"], "fallback": []}
+        if a_type == "visible":
+            strategy = str(target.get("strategy") or "").strip().lower()
+            value = str(target.get("value") or "").strip()
+            if strategy == "testid" and value:
+                return {"strict": [f"  await expect(page.locator('[data-testid=\"{value}\"]')).toBeVisible();"], "fallback": []}
+            if strategy == "selector" and value:
+                escaped = value.replace("'", "\\'")
+                return {"strict": [f"  await expect(page.locator('{escaped}')).toBeVisible();"], "fallback": []}
 
-    return lines or ["  await expect(page.locator('body')).toBeVisible();"]
+    text = str(assertion_item).strip()
+    if not text:
+        return {"strict": ["  await expect(page.locator('body')).toBeVisible();"], "fallback": []}
+
+    lower = text.lower()
+    quoted = re.search(r"'([^']+)'", text)
+    if "url" in lower and "/" in text:
+        path = "/" + text.split("/")[-1].strip()
+        path_regex = path.replace("/", "\\/")
+        return {"strict": [f"  await expect(page).toHaveURL(/{path_regex}/);"], "fallback": []}
+
+    if any(k in lower for k in ("popup", "modal", "dialog")):
+        strict_lines.append("  await expect(page.locator('[role=\"dialog\"], .modal, [aria-modal=\"true\"]').first()).toBeVisible();")
+        fallback_lines.append("  await expect(page.locator('body')).toBeVisible();")
+        return {"strict": strict_lines, "fallback": fallback_lines}
+
+    if any(k in lower for k in ("iframe", "frame")):
+        strict_lines.append("  await expect(page.frameLocator('iframe').first().locator('body')).toBeVisible();")
+        fallback_lines.append("  await expect(page.locator('iframe').first()).toBeVisible();")
+        return {"strict": strict_lines, "fallback": fallback_lines}
+
+    is_error = any(k in lower for k in ("error", "invalid", "failed", "failure", "unable", "blocked", "denied"))
+    is_success = any(k in lower for k in ("success", "applied", "completed", "persist", "saved", "confirmed"))
+
+    if is_success:
+        if quoted:
+            expected = quoted.group(1).replace("'", "\\'")
+            strict_lines.append(f"  await expect(page.getByText('{expected}', {{ exact: false }})).toBeVisible();")
+        else:
+            strict_lines.append("  await expect(page.getByText(/success|applied|completed|confirmed/i)).toBeVisible();")
+        fallback_lines.append("  await expect(page.getByText(/thanks|submitted|saved|done|success/i).first()).toBeVisible();")
+        return {"strict": strict_lines, "fallback": fallback_lines}
+
+    if is_error:
+        if quoted:
+            expected = quoted.group(1).replace("'", "\\'")
+            strict_lines.append(f"  await expect(page.getByText('{expected}', {{ exact: false }})).toBeVisible();")
+        else:
+            strict_lines.append("  await expect(page.locator('.text-danger, .alert-danger, [role=\"alert\"]').first()).toBeVisible();")
+        fallback_lines.append("  await expect(page.getByText(/invalid|error|failed|unable/i)).toBeVisible();")
+        return {"strict": strict_lines, "fallback": fallback_lines}
+
+    if "discount" in lower:
+        return {
+            "strict": ["  await expect(page.getByText(/discount/i)).toBeVisible();"],
+            "fallback": ["  await expect(page.getByText(/total|summary/i).first()).toBeVisible();"],
+        }
+
+    if "total" in lower:
+        return {
+            "strict": ["  await expect(page.getByText(/total/i)).toBeVisible();"],
+            "fallback": ["  await expect(page.locator('body')).toBeVisible();"],
+        }
+
+    if "change" in lower or "updated" in lower or "refresh" in lower or "dynamic" in lower:
+        strict_lines.append("  await expect(page.locator('body')).toBeVisible();")
+        fallback_lines.append("  await expect(page.getByText(/total|updated|last|summary/i)).toBeVisible();")
+        return {"strict": strict_lines, "fallback": fallback_lines}
+
+    if quoted:
+        expected = quoted.group(1).replace("'", "\\'")
+        return {"strict": [f"  await expect(page.getByText('{expected}', {{ exact: false }})).toBeVisible();"], "fallback": []}
+
+    selector = _pick_best_selector(crawl_summary, [text], fallback_selector)
+    escaped = selector.replace("'", "\\'")
+    strict_lines.append(f"  await expect(page.locator('{escaped}')).toBeVisible();")
+    fallback_lines.append("  await expect(page.locator('body')).toBeVisible();")
+    return {"strict": strict_lines, "fallback": fallback_lines}
 
 
 def _extract_selector_literals_from_text(text: str) -> List[str]:
@@ -355,9 +571,16 @@ def _extract_selector_literals_from_text(text: str) -> List[str]:
     return out
 
 
+def _is_universal_selector(selector: str) -> bool:
+    s = str(selector or "").strip().lower()
+    if not s:
+        return True
+    return s in {"body", "html", ":root", "*", "document", "page", "body *"}
+
+
 def _extract_feature_keywords(job: GenerationJob) -> List[str]:
-    blob = f"{job.feature_name} {job.feature_description}"
-    tokens = [t.strip().lower() for t in re.split(r"[^a-z0-9]+", blob) if len(t.strip()) >= 4]
+    blob = f"{job.feature_name} {job.feature_description}".lower()
+    tokens = [t.strip() for t in re.split(r"[^a-z0-9]+", blob) if len(t.strip()) >= 4]
     # Keep meaningful unique words for feature-presence checks.
     ignored = {"user", "with", "from", "page", "flow", "item", "feature", "see", "validation"}
     out = []
@@ -485,7 +708,7 @@ def _call_ollama_json(
             "num_predict": num_predict,
         },
     }
-    print("llm payload",payload)
+    
     llm_url = _llm_url()
     alt_url = llm_url.rstrip("/") if llm_url.endswith("/") else f"{llm_url}/"
     raw = ""
@@ -494,7 +717,6 @@ def _call_ollama_json(
     for candidate_url in [llm_url, alt_url]:
         try:
             raw = _post_json(candidate_url)
-            print("llm raw json",raw)
             last_exc = None
             break
         except HTTPError as exc:
@@ -594,10 +816,8 @@ def _normalize_planning_payload(planning: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _normalize_codegen_payload(codegen: Dict[str, Any]) -> Dict[str, Any]:
-    print("Codegen>>>>>>:",type(codegen))
     if not isinstance(codegen, dict):
         return {"page_objects": [], "specs": [], "notes": []}
-    print("Codegen>>>>>>return:",codegen)
     normalized: Dict[str, Any] = dict(codegen)
     page_objects = normalized.get("page_objects")
     specs = normalized.get("specs")
@@ -685,7 +905,7 @@ def _normalize_codegen_payload(codegen: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _run_crawl_context(
+def _run_node_crawl_context(
     *,
     base_url: str,
     seed_urls: List[str],
@@ -757,6 +977,139 @@ def _run_crawl_context(
         "routes": [],
         "warnings": [f"crawl returned non-json output: {stdout[:1000]}"],
     }
+
+
+def _run_ui_knowledge_context(
+    *,
+    base_url: str,
+    seed_urls: List[str],
+    max_routes: int,
+) -> Dict[str, Any]:
+    try:
+        from ui_knowledge.models import UIPage, UIRouteSnapshot
+    except Exception as exc:
+        return {
+            "base_url": base_url,
+            "seed_urls": seed_urls,
+            "routes": [],
+            "warnings": [f"ui_knowledge import failed: {str(exc)}"],
+        }
+
+    routes: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+
+    try:
+        pages = list(UIPage.objects.filter(is_active=True).order_by("route")[: max(max_routes, 1) * 3])
+    except Exception as exc:
+        return {
+            "base_url": base_url,
+            "seed_urls": seed_urls,
+            "routes": [],
+            "warnings": [f"ui_knowledge query failed: {str(exc)}"],
+        }
+
+    for page in pages:
+        if len(routes) >= max_routes:
+            break
+        snapshot = (
+            UIRouteSnapshot.objects.filter(page=page, snapshot_type="BASELINE", is_current=True)
+            .order_by("-version")
+            .first()
+        )
+        if not snapshot:
+            snapshot = (
+                UIRouteSnapshot.objects.filter(page=page, snapshot_type="BASELINE")
+                .order_by("-version")
+                .first()
+            )
+        if not snapshot:
+            snapshot = UIRouteSnapshot.objects.filter(page=page, is_current=True).order_by("-version").first()
+        if not snapshot:
+            continue
+
+        page_route = str(page.route or "").strip()
+        route_url = urljoin(base_url.rstrip("/") + "/", page_route.lstrip("/")) if page_route else base_url
+
+        interactables: List[Dict[str, Any]] = []
+        for el in snapshot.elements.all()[:200]:
+            selector_hints = [str(el.selector or "").strip()] if str(el.selector or "").strip() else []
+            if el.test_id:
+                selector_hints.append(f'[data-testid="{el.test_id}"]')
+            if el.text:
+                short_text = str(el.text).replace('"', '\\"')[:40]
+                selector_hints.append(f'{(el.tag or "button")}:has-text("{short_text}")')
+            selector_hints = list(dict.fromkeys([s for s in selector_hints if s]))[:8]
+
+            interactables.append(
+                {
+                    "tag": str(el.tag or ""),
+                    "role": str(el.role or ""),
+                    "test_id": str(el.test_id or ""),
+                    "aria_label": "",
+                    "id": str(el.element_id or ""),
+                    "name": "",
+                    "type": "",
+                    "text": str(el.text or ""),
+                    "href": "",
+                    "selector_hints": selector_hints,
+                    "selector_score": max(1.0, float(el.stability_score or 1.0) * 100.0),
+                    "intent_key": str(el.intent_key or "generic").strip().lower() or "generic",
+                }
+            )
+
+        snapshot_json = snapshot.snapshot_json if isinstance(snapshot.snapshot_json, dict) else {}
+        if not interactables and isinstance(snapshot_json.get("interactables"), list):
+            interactables = list(snapshot_json.get("interactables") or [])[:200]
+
+        route_row = {
+            "url": route_url,
+            "title": str(page.title or snapshot_json.get("title") or ""),
+            "depth": int(snapshot_json.get("depth") or 0),
+            "interactables": interactables,
+            "forms": list(snapshot_json.get("forms") or [])[:20] if isinstance(snapshot_json.get("forms"), list) else [],
+            "dom_hash": str(snapshot.dom_hash or snapshot_json.get("dom_hash") or ""),
+            "feature_name": str(page.feature_name or ""),
+            "source": "ui_knowledge",
+        }
+        routes.append(route_row)
+
+    if not routes:
+        warnings.append("No baseline/current UI knowledge routes found.")
+
+    return {
+        "base_url": base_url,
+        "seed_urls": seed_urls,
+        "max_routes": max_routes,
+        "routes_visited": len(routes),
+        "routes": routes,
+        "warnings": warnings,
+        "source": "ui_knowledge",
+    }
+
+
+def _run_crawl_context(
+    *,
+    base_url: str,
+    seed_urls: List[str],
+    max_routes: int,
+) -> Dict[str, Any]:
+    if _use_ui_knowledge_source():
+        ui_summary = _run_ui_knowledge_context(
+            base_url=base_url,
+            seed_urls=seed_urls,
+            max_routes=max_routes,
+        )
+        if ui_summary.get("routes"):
+            return ui_summary
+        if not _allow_live_crawl_fallback():
+            return ui_summary
+        fallback = _run_node_crawl_context(base_url=base_url, seed_urls=seed_urls, max_routes=max_routes)
+        warnings = ui_summary.get("warnings") or []
+        warnings.append("Falling back to live crawl because ui_knowledge had no usable routes.")
+        fallback["warnings"] = (fallback.get("warnings") or []) + warnings
+        fallback["source"] = "live_crawl_fallback"
+        return fallback
+    return _run_node_crawl_context(base_url=base_url, seed_urls=seed_urls, max_routes=max_routes)
 
 
 def _fallback_scenarios(job: GenerationJob, crawl_summary: Dict[str, Any]) -> Dict[str, Any]:
@@ -848,7 +1201,10 @@ def _build_planning_prompt(job: GenerationJob, crawl_summary: Dict[str, Any]) ->
     feature_presence = _feature_presence_report(job, crawl_summary)
 
     selector_map = _build_selector_map(crawl_summary)
-
+    print("selector_map>>>", selector_map)
+    print("intent_catalog>>>", intent_catalog)
+    print("feature_presence>>>", feature_presence)
+    exit()
     return (
         "You are a senior QA automation architect.\n"
         "Return STRICT JSON only.\n"
@@ -874,7 +1230,7 @@ def _build_planning_prompt(job: GenerationJob, crawl_summary: Dict[str, Any]) ->
         "- DO NOT invent selectors.\n"
         "- Use selectors from selector map.\n"
         "- Include ALL scenarios.\n"
-        "- At least one SMOKE and one NEGATIVE.\n"
+        
     )
 
 
@@ -907,6 +1263,86 @@ def _build_template_artifacts(
             return f"{prefix}{base[:1].upper()}{base[1:]}"
         return base
 
+    def _infer_action_kind(step: Dict[str, Any]) -> str:
+        action_text = " ".join(
+            [
+                str(step.get("action") or ""),
+                str(step.get("name") or ""),
+            ]
+        ).lower()
+        if any(k in action_text for k in ("click", "tap", "press", "submit")):
+            return "click"
+        if "refresh" in action_text or "reload" in action_text:
+            return "reload"
+        if any(k in action_text for k in ("navigate", "go to", "open")):
+            return "navigate"
+        if any(k in action_text for k in ("type", "enter", "input", "fill", "write")):
+            return "fill"
+        return "click"
+
+    def _extract_step_value(step: Dict[str, Any]) -> str:
+        direct = str(step.get("value") or "").strip()
+        if direct:
+            return direct
+        action_text = str(step.get("action") or "")
+        match = re.search(r"'([^']+)'", action_text)
+        if match:
+            return match.group(1).strip()
+        return ""
+
+    def _extract_fill_target_tokens(step: Dict[str, Any], action_value: str) -> List[str]:
+        action_text = " ".join(
+            [
+                str(step.get("action") or ""),
+                str(step.get("name") or ""),
+                str(step.get("selector") or ""),
+                str(step.get("locator") or ""),
+            ]
+        ).lower()
+
+        # Remove literal value from action text to avoid polluting target hints.
+        if action_value:
+            action_text = action_text.replace(str(action_value).lower(), " ")
+        action_text = re.sub(r"'[^']*'", " ", action_text)
+
+        segments: List[str] = [action_text]
+        into_match = re.search(r"\b(?:into|in|to|on)\s+(.+)$", action_text)
+        if into_match:
+            segments.append(into_match.group(1))
+
+        known_form_tokens = {
+            "name",
+            "email",
+            "subject",
+            "message",
+            "phone",
+            "mobile",
+            "password",
+            "username",
+            "search",
+            "address",
+            "city",
+            "state",
+            "zip",
+            "postal",
+            "country",
+            "code",
+            "otp",
+            "comment",
+            "description",
+            "details",
+            "note",
+            "first",
+            "last",
+        }
+
+        out: List[str] = []
+        for seg in segments:
+            for token in _tokenize(seg):
+                if token in known_form_tokens and token not in out:
+                    out.append(token)
+        return out[:8]
+
     feature_slug = _slug(job.feature_name)
     page_class = f"{_camel(job.feature_name)}Page"
     page_path = f"tests/pages/generated/{page_class}.ts"
@@ -915,22 +1351,34 @@ def _build_template_artifacts(
 
     selector_to_field: Dict[str, str] = {}
     field_to_selector: Dict[str, str] = {}
-    action_methods: Dict[Tuple[int, int], Dict[str, str]] = {}
+    action_methods: Dict[Tuple[int, int], Dict[str, Any]] = {}
     assertion_methods: Dict[Tuple[int, int], str] = {}
     used_names: set[str] = set()
 
     for s_idx, scenario in enumerate(scenarios):
         for st_idx, step in enumerate(scenario.get("steps") or []):
+            action_kind = _infer_action_kind(step)
+            action_value = _extract_step_value(step)
+            fill_target_tokens = _extract_fill_target_tokens(step, action_value) if action_kind == "fill" else []
             raw_selector = _render_failed_selector(step)
             hints = [
                 str(step.get("action") or ""),
                 str(step.get("name") or ""),
                 str(step.get("selector") or ""),
                 str(step.get("locator") or ""),
-                str(scenario.get("title") or ""),
-                str(job.feature_name or ""),
             ]
-            selector = _pick_best_selector(crawl_summary, hints, raw_selector)
+            if action_kind == "fill":
+                hints.extend(["input", "textbox", "textarea", "field", *fill_target_tokens])
+            if action_kind == "click":
+                hints.extend(["button", "link", "cta"])
+            selector = _pick_best_selector(
+                crawl_summary,
+                hints,
+                raw_selector,
+                action_kind=action_kind,
+                action_text=str(step.get("action") or step.get("name") or ""),
+                fill_target_tokens=fill_target_tokens,
+            )
             if selector not in selector_to_field:
                 field_name = _ident(step.get("action") or f"action {len(selector_to_field)+1}", "actionSelector")
                 if not field_name.endswith("Selector"):
@@ -943,19 +1391,13 @@ def _build_template_artifacts(
                 used_names.add(field_name)
                 selector_to_field[selector] = field_name
                 field_to_selector[field_name] = selector
-            method_name = _method_name(step.get("action") or f"run step {st_idx + 1}", "do")
-            base_method = method_name
-            counter = 2
-            while method_name in used_names:
-                method_name = f"{base_method}{counter}"
-                counter += 1
-            used_names.add(method_name)
             action_methods[(s_idx, st_idx)] = {
-                "method_name": method_name,
                 "field_name": selector_to_field[selector],
                 "selector": selector,
                 "intent_key": _render_intent_key(step),
                 "use_of_selector": _render_step_name(step, "click on generated action"),
+                "action_kind": action_kind,
+                "action_value": action_value,
             }
 
         for a_idx, assertion in enumerate(scenario.get("assertions") or []):
@@ -987,37 +1429,35 @@ def _build_template_artifacts(
         "  }",
         "",
     ]
-    for s_idx, scenario in enumerate(scenarios):
-        for st_idx, step in enumerate(scenario.get("steps") or []):
-            meta = action_methods.get((s_idx, st_idx))
-            if not meta:
-                continue
-            action_method_lines.extend(
-                [
-                    f"  async {meta['method_name']}() {{",
-                    f"    await this.page.click(this.{meta['field_name']});",
-                    "  }",
-                    "",
-                ]
-            )
 
     assertion_method_lines = []
     for s_idx, scenario in enumerate(scenarios):
-        for a_idx, _ in enumerate(scenario.get("assertions") or []):
+        for a_idx, assertion in enumerate(scenario.get("assertions") or []):
             method_name = assertion_methods.get((s_idx, a_idx))
             if not method_name:
                 continue
             first_selector = next(iter(field_to_selector.values()))
-            assertion_lines = _render_assertion_lines(scenario, crawl_summary, first_selector)
-            body = []
-            for line in assertion_lines[:1]:
-                body.append(line.replace("page.", "this.page.").replace("  await", "    await"))
-            if not body:
-                body = ["    await expect(this.page.locator('body')).toBeVisible();"]
+            plan = _render_single_assertion_plan(assertion, crawl_summary, first_selector)
+            strict_body: List[str] = []
+            fallback_body: List[str] = []
+            for line in plan.get("strict") or []:
+                strict_body.append(line.replace("page.", "this.page.").replace("  await", "      await"))
+            for line in plan.get("fallback") or []:
+                fallback_body.append(line.replace("page.", "this.page.").replace("  await", "      await"))
+            if not strict_body:
+                strict_body = ["      await expect(this.page.locator('body')).toBeVisible();"]
             assertion_method_lines.extend(
                 [
                     f"  async {method_name}() {{",
-                    *body,
+                    "    let strictPassed = true;",
+                    "    try {",
+                    *strict_body,
+                    "    } catch (_assertErr) {",
+                    "      strictPassed = false;",
+                    "    }",
+                    "    if (!strictPassed) {",
+                    *(fallback_body or ["      throw new Error('Strict assertion failed and no fallback passed.');"]),
+                    "    }",
                     "  }",
                     "",
                 ]
@@ -1055,8 +1495,13 @@ export class {page_class} {{
         scenario_type = str(scenario.get("type") or "SMOKE").upper()
         title = str(scenario.get("title") or "Generated scenario")
         full_title = f"{scenario_type} - {title}"
+        title_log = full_title.replace("\\", "\\\\").replace("'", "\\'")
         lines = [
             f"  test('{full_title}', async ({{ page }}, testInfo) => {{",
+            "    console.log(chalk.hex('#00FFFF')('\\n========================================'));",
+            f"    console.log(chalk.hex('#00FFFF')('TEST: {title_log}'));",
+            "    console.log(chalk.hex('#00FFFF')('========================================'));",
+            "",
             f"    const flow = new {page_class}(page);",
             "    await flow.openHomePage();",
             "",
@@ -1067,9 +1512,69 @@ export class {page_class} {{
                 continue
             failed_selector = meta["selector"].replace("'", "\\'")
             use_of_selector = meta["use_of_selector"].replace("'", "\\'")
+            action_kind = str(meta.get("action_kind") or "click")
+            action_value = str(meta.get("action_value") or "").replace("\\", "\\\\").replace("'", "\\'")
+            step_log = _render_step_name(step, "perform action").replace("\\", "\\\\").replace("'", "\\'")
             lines.extend(
                 [
                     f"    // Step {st_idx}: {_render_step_name(step, 'perform action')}",
+                    f"    console.log('Step {st_idx}: {step_log}');",
+                ]
+            )
+            if action_kind == "reload":
+                lines.extend(
+                    [
+                        "    await page.reload({ waitUntil: 'domcontentloaded' });",
+                        "",
+                    ]
+                )
+                continue
+            if action_kind == "fill":
+                if action_value:
+                    lines.extend(
+                        [
+                            f"    await page.locator(flow.{meta['field_name']}).first().fill('{action_value}');",
+                            "",
+                        ]
+                    )
+                else:
+                    lines.extend(
+                        [
+                            "    await selfHealingClick(",
+                            "      page,",
+                            f"      flow.actionLocator(flow.{meta['field_name']}),",
+                            f"      '{failed_selector}',",
+                            "      testInfo,",
+                            "      {",
+                            f"        use_of_selector: '{use_of_selector}',",
+                            "        selector_type: 'generated',",
+                            f"        intent_key: '{meta['intent_key']}',",
+                            "      }",
+                            "    );",
+                            "",
+                        ]
+                    )
+                continue
+            if action_kind == "navigate":
+                lines.extend(
+                    [
+                        "    await selfHealingClick(",
+                        "      page,",
+                        f"      flow.actionLocator(flow.{meta['field_name']}),",
+                        f"      '{failed_selector}',",
+                        "      testInfo,",
+                        "      {",
+                        f"        use_of_selector: '{use_of_selector}',",
+                        "        selector_type: 'generated',",
+                        f"        intent_key: '{meta['intent_key']}',",
+                        "      }",
+                        "    );",
+                        "",
+                    ]
+                )
+                continue
+            lines.extend(
+                [
                     "    await selfHealingClick(",
                     "      page,",
                     f"      flow.actionLocator(flow.{meta['field_name']}),",
@@ -1096,6 +1601,7 @@ export class {page_class} {{
         test_blocks.append(os.linesep.join(lines))
 
     spec_content = f"""import {{ test, expect }} from '../baseTest';
+import chalk from 'chalk';
 import {{ selfHealingClick }} from '../utils/selfHealing';
 import {{ {page_class} }} from '../pages/generated/{page_class}';
 
@@ -1139,7 +1645,6 @@ def _build_codegen_prompt(job: GenerationJob, planning: Dict[str, Any], crawl_su
 
     intent_catalog = _available_intent_keys()
     selector_map = _build_selector_map(crawl_summary)
-
     return (
         "You generate Playwright TypeScript test files.\n"
         "Return STRICT JSON ONLY.\n"
@@ -1161,6 +1666,7 @@ def _build_codegen_prompt(job: GenerationJob, planning: Dict[str, Any], crawl_su
         "- include intent_key in healing options\n"
         "- avoid waitForTimeout/setTimeout/test.only\n"
         "- DO NOT skip any scenario or step.\n"
+        
     )
 
 
@@ -1194,6 +1700,31 @@ def _is_codegen_empty(payload: Dict[str, Any] | None) -> bool:
     return not (payload.get("page_objects") or payload.get("specs"))
 
 
+def _ensure_spec_required_imports(content: str) -> str:
+    text = str(content or "")
+    lines = text.splitlines()
+    has_base_test_import = bool(re.search(r"from\s+['\"]\.\./baseTest['\"]", text))
+    has_self_healing_import = bool(
+        re.search(r"from\s+['\"]\.\./utils/selfHealing['\"]", text)
+    )
+
+    # Normalize any existing baseTest import to the required named import form.
+    if has_base_test_import:
+        lines = [
+            ln for ln in lines
+            if "from '../baseTest'" not in ln and 'from "../baseTest"' not in ln
+        ]
+    prefix: List[str] = ["import { test, expect } from '../baseTest';"]
+    if not has_self_healing_import:
+        prefix.append("import { selfHealingClick } from '../utils/selfHealing';")
+
+    # Keep imports grouped at the top for deterministic output.
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    rebuilt = "\n".join(prefix + lines)
+    return rebuilt.strip() + "\n"
+
+
 def _extract_codegen_artifacts(
     job: GenerationJob,
     codegen_json: Dict[str, Any],
@@ -1211,11 +1742,12 @@ def _extract_codegen_artifacts(
             }
         )
     for spec in codegen_json.get("specs") or []:
+        spec_content = _ensure_spec_required_imports(str(spec.get("content") or ""))
         artifacts.append(
             {
                 "artifact_type": GeneratedArtifact.TYPE_SPEC,
                 "relative_path": str(spec.get("path") or ""),
-                "content": str(spec.get("content") or ""),
+                "content": spec_content,
             }
         )
 
@@ -1241,21 +1773,13 @@ def _runtime_validate_selectors(
             "warnings": [],
         }
 
-    repo_root = _repo_root()
-    validator_script = repo_root / "tests" / "utils" / "validateSelectors.mjs"
-    if not validator_script.exists():
-        return validated_artifacts, {
-            "enabled": True,
-            "checked_selectors": 0,
-            "missing_selectors": 0,
-            "warnings": [f"Selector validator script missing at {validator_script}"],
-        }
-
     all_selectors: List[str] = []
     for artifact in validated_artifacts:
         if artifact.get("artifact_type") != GeneratedArtifact.TYPE_SPEC:
             continue
         for selector in _extract_selector_literals_from_text(str(artifact.get("content") or "")):
+            if _is_universal_selector(selector):
+                continue
             if selector and selector not in all_selectors:
                 all_selectors.append(selector)
 
@@ -1267,69 +1791,89 @@ def _runtime_validate_selectors(
             "warnings": [],
         }
 
-    route_urls = [str(r.get("url") or "").strip() for r in (crawl_summary.get("routes") or []) if r.get("url")]
-    if not route_urls:
-        route_urls = [base_url]
-    route_urls = route_urls[:30]
-
-    cmd = [
-        "node",
-        str(validator_script),
-        "--base-url",
-        base_url,
-        "--urls",
-        json.dumps(route_urls),
-        "--selectors",
-        json.dumps(all_selectors),
-    ]
-    try:
-        proc = subprocess.run(
-            cmd,
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
-    except Exception as exc:
-        warning = f"Runtime selector validation failed to run: {str(exc)}"
-        return validated_artifacts, {
-            "enabled": True,
-            "checked_selectors": len(all_selectors),
-            "missing_selectors": 0,
-            "warnings": [warning],
-        }
-
-    stdout = (proc.stdout or "").strip()
-    stderr = (proc.stderr or "").strip()
-    if proc.returncode != 0:
-        warning = f"Runtime selector validation rc={proc.returncode}: {(stderr or stdout)[:500]}"
-        return validated_artifacts, {
-            "enabled": True,
-            "checked_selectors": len(all_selectors),
-            "missing_selectors": 0,
-            "warnings": [warning],
-        }
-
-    try:
-        parsed = json.loads(stdout) if stdout else {}
-    except json.JSONDecodeError:
-        return validated_artifacts, {
-            "enabled": True,
-            "checked_selectors": len(all_selectors),
-            "missing_selectors": 0,
-            "warnings": [f"Runtime selector validation returned non-JSON: {stdout[:500]}"],
-        }
-
-    result_rows = parsed.get("results") or []
     missing_map: Dict[str, str] = {}
-    for row in result_rows:
-        selector = str(row.get("selector") or "").strip()
-        if not selector:
-            continue
-        if not bool(row.get("matched")):
-            error_text = str(row.get("error") or "selector not found on crawled routes").strip()
-            missing_map[selector] = error_text
+    source = str(crawl_summary.get("source") or "").strip().lower()
+    validation_source = _selector_validation_source()
+
+    use_ui_knowledge_validation = validation_source == "ui_knowledge" or source == "ui_knowledge"
+    if use_ui_knowledge_validation:
+        missing_map = _validate_selectors_from_ui_knowledge(
+            selectors=all_selectors,
+            crawl_summary=crawl_summary,
+        )
+    else:
+        repo_root = _repo_root()
+        validator_script = repo_root / "tests" / "utils" / "validateSelectors.mjs"
+        if not validator_script.exists():
+            return validated_artifacts, {
+                "enabled": True,
+                "checked_selectors": 0,
+                "missing_selectors": 0,
+                "warnings": [f"Selector validator script missing at {validator_script}"],
+            }
+
+        route_urls = [str(r.get("url") or "").strip() for r in (crawl_summary.get("routes") or []) if r.get("url")]
+        if not route_urls:
+            route_urls = [base_url]
+        route_urls = route_urls[:30]
+
+        cmd = [
+            "node",
+            str(validator_script),
+            "--base-url",
+            base_url,
+            "--urls",
+            json.dumps(route_urls),
+            "--selectors",
+            json.dumps(all_selectors),
+        ]
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        except Exception as exc:
+            warning = f"Runtime selector validation failed to run: {str(exc)}"
+            return validated_artifacts, {
+                "enabled": True,
+                "checked_selectors": len(all_selectors),
+                "missing_selectors": 0,
+                "warnings": [warning],
+            }
+
+        stdout = (proc.stdout or "").strip()
+        stderr = (proc.stderr or "").strip()
+        if proc.returncode != 0:
+            warning = f"Runtime selector validation rc={proc.returncode}: {(stderr or stdout)[:500]}"
+            return validated_artifacts, {
+                "enabled": True,
+                "checked_selectors": len(all_selectors),
+                "missing_selectors": 0,
+                "warnings": [warning],
+            }
+
+        try:
+            parsed = json.loads(stdout) if stdout else {}
+        except json.JSONDecodeError:
+            return validated_artifacts, {
+                "enabled": True,
+                "checked_selectors": len(all_selectors),
+                "missing_selectors": 0,
+                "warnings": [f"Runtime selector validation returned non-JSON: {stdout[:500]}"],
+            }
+
+        result_rows = parsed.get("results") or []
+        for row in result_rows:
+            selector = str(row.get("selector") or "").strip()
+            if not selector:
+                continue
+            if not bool(row.get("matched")):
+                error_text = str(row.get("error") or "selector not found on crawled routes").strip()
+                missing_map[selector] = error_text
 
     if not missing_map:
         return validated_artifacts, {
@@ -1407,7 +1951,7 @@ def _validate_artifact_content(artifact_type: str, content: str) -> Tuple[List[s
 
     if artifact_type == GeneratedArtifact.TYPE_SPEC:
         required = [
-            ("from '../baseTest'", "Spec must import from ../baseTest"),
+            ("import { test, expect } from '../baseTest';", "Spec must import { test, expect } from ../baseTest"),
             ("selfHealingClick", "Spec must use/import selfHealingClick"),
             ("intent_key", "Spec must include intent_key in healing options"),
             ("expect(", "Spec must include assertion"),
@@ -1415,11 +1959,23 @@ def _validate_artifact_content(artifact_type: str, content: str) -> Tuple[List[s
         for needle, msg in required:
             if needle not in text:
                 errors.append(msg)
+        incompatible_framework_patterns = [
+            (r"\bsuite\s*\(", "Spec must use Playwright test.describe(), not suite()"),
+            (r"\bsuiteSetup\s*\(", "Spec must use Playwright hooks, not suiteSetup()"),
+            (r"\btest\.page\b", "Spec must use injected `{ page }`, not test.page"),
+            (r"\bconst\s+\w+\s*=\s*new\s+\w+\s*\(\s*test\.page\s*\)", "Do not construct page objects with test.page"),
+            (r"import\s+\w+\s*,\s*\{\s*expect\s*\}\s+from\s+['\"]\.\./baseTest['\"]", "Do not default-import test from ../baseTest"),
+        ]
+        for pattern, message in incompatible_framework_patterns:
+            if re.search(pattern, text):
+                errors.append(message)
     if artifact_type == GeneratedArtifact.TYPE_PAGE_OBJECT:
         if "class " not in text:
             errors.append("Page object file must define a class")
         if "constructor(" not in text:
             errors.append("Page object class must define constructor")
+        if "selfHealingClick(" in text and ("from '../utils/selfHealing'" not in text and 'from "../utils/selfHealing"' not in text):
+            errors.append("Page object uses selfHealingClick but does not import it")
 
     return errors, warnings
 
@@ -1517,53 +2073,444 @@ def _validate_artifacts(artifacts: List[Dict[str, Any]]) -> Tuple[List[Dict[str,
     return validated, summary
 
 
-def _sanitize_scenarios(raw_scenarios: List[Dict[str, Any]], max_scenarios: int) -> List[Dict[str, Any]]:
+def _planning_from_existing_job_scenarios(job: GenerationJob) -> Dict[str, Any] | None:
+    rows: List[Dict[str, Any]] = []
+    for s in job.scenarios.order_by("priority"):
+        rows.append(
+            {
+                "id": str(s.scenario_id or ""),
+                "title": str(s.title or ""),
+                "type": str(s.scenario_type or "SMOKE"),
+                "preconditions": _safe_json(s.preconditions or [], []),
+                "steps": _safe_json(s.steps or [], []),
+                "assertions": _safe_json(s.expected_assertions or [], []),
+            }
+        )
+    if not rows:
+        return None
+    return {
+        "feature_summary": str(job.feature_summary or f"Existing scenarios for {job.feature_name}"),
+        "scenarios": rows,
+        "notes": ["Planning sourced from existing saved scenarios."],
+    }
+
+
+def _normalize_step_item(step: Any) -> Dict[str, Any] | None:
+    if isinstance(step, dict):
+        action = str(step.get("action") or step.get("name") or "").strip()
+        if not action:
+            return None
+        row: Dict[str, Any] = {
+            "action": action,
+            "selector": str(step.get("selector") or step.get("locator") or "").strip(),
+            "intent_key": _render_intent_key(step),
+        }
+        value = step.get("value")
+        if value is not None:
+            row["value"] = str(value)
+        return row
+
+    action = str(step or "").strip()
+    if not action:
+        return None
+    return {
+        "action": action,
+        "selector": "",
+        "intent_key": "generic",
+    }
+
+
+def _sanitize_scenarios(
+    raw_scenarios: List[Dict[str, Any]],
+    max_scenarios: int,
+    *,
+    enforce_balance: bool = True,
+) -> List[Dict[str, Any]]:
     scenarios: List[Dict[str, Any]] = []
     seen_titles = set()
     for idx, item in enumerate(raw_scenarios[:max_scenarios], start=1):
+        if not isinstance(item, dict):
+            continue
         title = (item.get("title") or f"Generated Scenario {idx}").strip()
         if title.lower() in seen_titles:
             title = f"{title} #{idx}"
         seen_titles.add(title.lower())
+        raw_steps = item.get("steps") or []
+        normalized_steps: List[Dict[str, Any]] = []
+        for step in raw_steps[:20]:
+            row = _normalize_step_item(step)
+            if row:
+                normalized_steps.append(row)
+        if not normalized_steps:
+            normalized_steps = [{"action": "open feature page", "selector": "/", "intent_key": "generic"}]
+
+        preconditions = [str(p).strip() for p in (item.get("preconditions") or []) if str(p).strip()][:10]
+        assertions = [str(a).strip() for a in (item.get("assertions") or []) if str(a).strip()][:10]
+        if not assertions:
+            assertions = ["Page renders without runtime errors"]
+
         scenarios.append(
             {
                 "id": (item.get("id") or f"scenario_{idx}").strip(),
                 "title": title,
                 "type": _normalize_scenario_type(item.get("type") or "SMOKE"),
-                "preconditions": _safe_json(item.get("preconditions") or [], []),
-                "steps": _safe_json(item.get("steps") or [], []),
-                "assertions": _safe_json(item.get("assertions") or [], []),
+                "preconditions": preconditions,
+                "steps": normalized_steps,
+                "assertions": assertions,
             }
         )
-    # Ensure at least one smoke and one negative.
-    types = {s["type"] for s in scenarios}
-    if GenerationScenario.TYPE_SMOKE not in types:
-        scenarios.insert(
-            0,
-            {
-                "id": "smoke_auto",
-                "title": "Auto-added smoke scenario",
-                "type": GenerationScenario.TYPE_SMOKE,
-                "preconditions": [],
-                "steps": [{"action": "open feature page", "selector": "/", "intent_key": "generic"}],
-                "assertions": ["Page renders without errors"],
-            },
-        )
-    if GenerationScenario.TYPE_NEGATIVE not in types:
-        scenarios.append(
-            {
-                "id": "negative_auto",
-                "title": "Auto-added negative scenario",
-                "type": GenerationScenario.TYPE_NEGATIVE,
-                "preconditions": [],
-                "steps": [{"action": "trigger invalid action", "selector": "text=Submit", "intent_key": "generic"}],
-                "assertions": ["Validation message appears"],
-            }
-        )
+    if enforce_balance:
+        # Ensure at least one smoke and one negative.
+        types = {s["type"] for s in scenarios}
+        if GenerationScenario.TYPE_SMOKE not in types:
+            scenarios.insert(
+                0,
+                {
+                    "id": "smoke_auto",
+                    "title": "Auto-added smoke scenario",
+                    "type": GenerationScenario.TYPE_SMOKE,
+                    "preconditions": [],
+                    "steps": [{"action": "open feature page", "selector": "/", "intent_key": "generic"}],
+                    "assertions": ["Page renders without errors"],
+                },
+            )
+        if GenerationScenario.TYPE_NEGATIVE not in types:
+            scenarios.append(
+                {
+                    "id": "negative_auto",
+                    "title": "Auto-added negative scenario",
+                    "type": GenerationScenario.TYPE_NEGATIVE,
+                    "preconditions": [],
+                    "steps": [{"action": "trigger invalid action", "selector": "text=Submit", "intent_key": "generic"}],
+                    "assertions": ["Validation message appears"],
+                }
+            )
     return scenarios[:max_scenarios]
 
 
-def generate_job_draft(job: GenerationJob) -> GenerationJob:
+def _scenario_quality_score(scenarios: List[Dict[str, Any]]) -> int:
+    score = 0
+    if not scenarios:
+        return score
+
+    types = {str(s.get("type") or "").upper() for s in scenarios}
+    if GenerationScenario.TYPE_SMOKE in types:
+        score += 3
+    if GenerationScenario.TYPE_NEGATIVE in types:
+        score += 3
+
+    for scenario in scenarios:
+        steps = scenario.get("steps") or []
+        assertions = scenario.get("assertions") or []
+        score += min(len(steps), 8)
+        score += min(len(assertions), 8)
+        for step in steps:
+            selector = str(step.get("selector") or "").strip()
+            if selector:
+                score += 1
+            intent_key = str(step.get("intent_key") or "").strip().lower()
+            if intent_key and intent_key != "generic":
+                score += 1
+    return score
+
+
+def _merge_verified_scenarios(
+    base_scenarios: List[Dict[str, Any]],
+    candidate_scenarios: List[Dict[str, Any]],
+    *,
+    max_scenarios: int,
+    enforce_balance: bool,
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    candidate_by_title = {
+        str(c.get("title") or "").strip().lower(): c
+        for c in candidate_scenarios
+        if isinstance(c, dict) and str(c.get("title") or "").strip()
+    }
+
+    used_titles = set()
+    for base in base_scenarios:
+        title_key = str(base.get("title") or "").strip().lower()
+        candidate = candidate_by_title.get(title_key)
+        merged = dict(base)
+        if candidate:
+            used_titles.add(title_key)
+            base_steps = [dict(s) for s in (base.get("steps") or [])]
+            cand_steps = [dict(s) for s in (candidate.get("steps") or [])]
+            merged_steps: List[Dict[str, Any]] = []
+            for idx, step in enumerate(base_steps):
+                row = dict(step)
+                if idx < len(cand_steps):
+                    cstep = cand_steps[idx]
+                    if not str(row.get("selector") or "").strip() and str(cstep.get("selector") or "").strip():
+                        row["selector"] = str(cstep.get("selector") or "").strip()
+                    if str(row.get("intent_key") or "generic").strip().lower() == "generic":
+                        c_intent = str(cstep.get("intent_key") or "").strip().lower()
+                        if c_intent and c_intent != "generic":
+                            row["intent_key"] = c_intent
+                    if row.get("value") is None and cstep.get("value") is not None:
+                        row["value"] = str(cstep.get("value"))
+                merged_steps.append(row)
+            if len(cand_steps) > len(merged_steps):
+                merged_steps.extend(cand_steps[len(merged_steps) :])
+            merged["steps"] = merged_steps[:20]
+
+            merged_assertions: List[str] = []
+            for item in (base.get("assertions") or []) + (candidate.get("assertions") or []):
+                text = str(item).strip()
+                if text and text not in merged_assertions:
+                    merged_assertions.append(text)
+            merged["assertions"] = merged_assertions[:10]
+
+            merged_preconditions: List[str] = []
+            for item in (base.get("preconditions") or []) + (candidate.get("preconditions") or []):
+                text = str(item).strip()
+                if text and text not in merged_preconditions:
+                    merged_preconditions.append(text)
+            merged["preconditions"] = merged_preconditions[:10]
+        out.append(merged)
+
+    for candidate in candidate_scenarios:
+        title_key = str(candidate.get("title") or "").strip().lower()
+        if not title_key or title_key in used_titles:
+            continue
+        out.append(candidate)
+        used_titles.add(title_key)
+        if len(out) >= max_scenarios:
+            break
+
+    return _sanitize_scenarios(out, max_scenarios, enforce_balance=enforce_balance)
+
+
+def _verify_and_patch_planning_with_llm(
+    *,
+    job: GenerationJob,
+    crawl_summary: Dict[str, Any],
+    planning: Dict[str, Any],
+    enforce_balance: bool,
+) -> Tuple[Dict[str, Any], List[str]]:
+    notes: List[str] = []
+    effective_max_scenarios = int(job.max_scenarios or _max_scenarios_default())
+    if not _planning_verify_enabled():
+        return planning, notes
+    if not _test_gen_enabled():
+        return planning, notes
+
+    base_scenarios = _sanitize_scenarios(
+        planning.get("scenarios") or [],
+        effective_max_scenarios,
+        enforce_balance=enforce_balance,
+    )
+    if not base_scenarios:
+        return planning, notes
+
+    try:
+        verify_prompt = (
+            "You are validating and improving an existing QA test-scenario plan.\n"
+            "Improve only if meaningful. Keep same feature scope. Do not invent unrelated flows.\n"
+            "Return strict JSON object with keys: feature_summary (string), scenarios (array), notes (array).\n"
+            f"Constraints: max {effective_max_scenarios} scenarios; "
+            "each scenario needs id,title,type,preconditions,steps,assertions; "
+            "steps use action,selector,intent_key,value(optional).\n"
+            "Prefer preserving original steps and patching missing selectors/assertions.\n\n"
+            f"Feature: {job.feature_name}\n"
+            f"Description: {job.feature_description}\n"
+            "Crawl summary (short):\n"
+            f"{json.dumps({'routes': (crawl_summary.get('routes') or [])[:5]}, ensure_ascii=False)}\n\n"
+            "Current planning JSON:\n"
+            f"{json.dumps({'feature_summary': planning.get('feature_summary'), 'scenarios': base_scenarios}, ensure_ascii=False)}\n"
+        )
+        raw = _call_ollama_json(
+            prompt=verify_prompt,
+            model=job.llm_model or _default_test_gen_model(),
+            temperature=float(job.llm_temperature or 0.0),
+            timeout_seconds=_llm_timeout(),
+            num_predict=_planning_verify_num_predict(),
+        )
+        normalized = _normalize_planning_payload(raw)
+        candidate_raw = normalized.get("scenarios") or []
+        candidate_scenarios = _sanitize_scenarios(
+            candidate_raw,
+            effective_max_scenarios,
+            enforce_balance=enforce_balance,
+        )
+        if not candidate_scenarios:
+            notes.append("Planning verify skipped: LLM returned no scenarios.")
+            return planning, notes
+
+        merged_scenarios = _merge_verified_scenarios(
+            base_scenarios,
+            candidate_scenarios,
+            max_scenarios=effective_max_scenarios,
+            enforce_balance=enforce_balance,
+        )
+        base_score = _scenario_quality_score(base_scenarios)
+        merged_score = _scenario_quality_score(merged_scenarios)
+        changed = json.dumps(base_scenarios, sort_keys=True) != json.dumps(merged_scenarios, sort_keys=True)
+        if changed and merged_score >= base_score:
+            patched = dict(planning)
+            patched["scenarios"] = merged_scenarios
+            summary = str(normalized.get("feature_summary") or "").strip()
+            if summary:
+                patched["feature_summary"] = summary
+            notes.append(f"Planning verified with LLM: patch applied (score {base_score} -> {merged_score}).")
+            return patched, notes
+        notes.append(f"Planning verified with LLM: no beneficial patch (score {base_score} -> {merged_score}).")
+        return planning, notes
+    except (URLError, ValueError, TimeoutError, json.JSONDecodeError) as exc:
+        notes.append(f"Planning verify LLM skipped: {str(exc)}")
+        return planning, notes
+
+
+def _plan_scenarios(
+    job: GenerationJob,
+    crawl_summary: Dict[str, Any],
+    *,
+    manual_scenarios: List[Dict[str, Any]] | None = None,
+    use_existing_scenarios: bool = False,
+    llm_first: bool = False,
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]], List[str]]:
+    planning: Dict[str, Any] | None = _manual_scenarios_to_planning_payload(job, manual_scenarios or [])
+    notes: List[str] = []
+    planning_source = "manual" if planning else ""
+    effective_max_scenarios = int(job.max_scenarios or _max_scenarios_default())
+    manual_input = bool(manual_scenarios)
+    enforce_balance = not (manual_input and _respect_manual_scenarios_exactly())
+
+    def _try_llm_planning() -> Dict[str, Any] | None:
+        if not _test_gen_enabled():
+            return None
+        try:
+            planning_prompt = _build_planning_prompt(job, crawl_summary)
+            raw = _call_ollama_json(
+                prompt=planning_prompt,
+                model=job.llm_model or _default_test_gen_model(),
+                temperature=float(job.llm_temperature or 0.0),
+                timeout_seconds=_llm_timeout(),
+                num_predict=900,
+            )
+            normalized = _normalize_planning_payload(raw)
+            if not isinstance(normalized.get("scenarios"), list) or not normalized.get("scenarios"):
+                return None
+            return normalized
+        except (URLError, ValueError, TimeoutError, json.JSONDecodeError) as exc:
+            notes.append(f"Planning LLM fallback: {str(exc)}")
+            return None
+
+    if not planning and llm_first:
+        planning = _try_llm_planning()
+        if planning:
+            planning_source = "llm"
+
+    if not planning and use_existing_scenarios:
+        planning = _planning_from_existing_job_scenarios(job)
+        if planning:
+            planning_source = "existing"
+
+    if not planning and not llm_first:
+        planning = _try_llm_planning()
+        if planning:
+            planning_source = "llm"
+
+    if not planning:
+        planning = _fallback_scenarios(job, crawl_summary)
+        planning_source = "fallback"
+
+    if planning_source in {"manual", "existing", "fallback"}:
+        planning, verify_notes = _verify_and_patch_planning_with_llm(
+            job=job,
+            crawl_summary=crawl_summary,
+            planning=planning,
+            enforce_balance=enforce_balance,
+        )
+        notes.extend(verify_notes)
+
+    scenarios = _sanitize_scenarios(
+        planning.get("scenarios") or [],
+        effective_max_scenarios,
+        enforce_balance=enforce_balance,
+    )
+    planning["scenarios"] = scenarios
+    if not isinstance(planning.get("notes"), list):
+        planning["notes"] = []
+    if not isinstance(planning.get("feature_summary"), str) or not str(planning.get("feature_summary")).strip():
+        planning["feature_summary"] = f"Auto-generated scenarios for {job.feature_name}"
+    return planning, scenarios, notes
+
+
+def _invalid_artifact_summary(validated_artifacts: List[Dict[str, Any]]) -> str:
+    rows: List[str] = []
+    for artifact in validated_artifacts:
+        if artifact.get("validation_status") == GeneratedArtifact.VALID:
+            continue
+        path = str(artifact.get("relative_path") or "(unknown)")
+        errors = artifact.get("validation_errors") or []
+        first_error = str(errors[0]) if errors else "unknown validation error"
+        rows.append(f"{path}: {first_error}")
+    return "; ".join(rows[:3])
+
+
+def _manual_scenarios_to_planning_payload(
+    job: GenerationJob,
+    manual_scenarios: List[Dict[str, Any]],
+) -> Dict[str, Any] | None:
+    if not isinstance(manual_scenarios, list) or not manual_scenarios:
+        return None
+
+    rows: List[Dict[str, Any]] = []
+    for idx, raw in enumerate(manual_scenarios, start=1):
+        if not isinstance(raw, dict):
+            continue
+        title = str(raw.get("title") or f"Manual Scenario {idx}").strip() or f"Manual Scenario {idx}"
+        raw_steps = raw.get("steps") or []
+        steps: List[Dict[str, Any]] = []
+        for s_idx, step in enumerate(raw_steps, start=1):
+            if isinstance(step, dict):
+                action_text = str(step.get("action") or step.get("name") or f"step {s_idx}")
+                step_row = {
+                    "action": action_text,
+                    "selector": str(step.get("selector") or step.get("locator") or ""),
+                    "intent_key": str(step.get("intent_key") or "generic"),
+                }
+                if step.get("value") is not None:
+                    step_row["value"] = str(step.get("value"))
+                steps.append(step_row)
+                continue
+            action_text = str(step or "").strip()
+            if not action_text:
+                continue
+            step_row = {
+                "action": action_text,
+                "selector": "",
+                "intent_key": "generic",
+            }
+            m = re.search(r"'([^']+)'", action_text)
+            if m:
+                step_row["value"] = m.group(1)
+            steps.append(step_row)
+        assertions = [str(a).strip() for a in (raw.get("assertions") or []) if str(a).strip()]
+        rows.append(
+            {
+                "id": str(raw.get("id") or f"manual_{idx}"),
+                "title": title,
+                "type": str(raw.get("type") or ("NEGATIVE" if ("invalid" in title.lower() or "negative" in title.lower()) else "SMOKE")),
+                "preconditions": [str(p).strip() for p in (raw.get("preconditions") or []) if str(p).strip()],
+                "steps": steps,
+                "assertions": assertions,
+            }
+        )
+
+    if not rows:
+        return None
+
+    return {
+        "feature_summary": f"Manual scenarios from request file for {job.feature_name}",
+        "scenarios": rows,
+        "notes": ["Planning sourced from manual_scenarios payload."],
+    }
+
+
+def generate_job_draft(job: GenerationJob, *, manual_scenarios: List[Dict[str, Any]] | None = None) -> GenerationJob:
     job.job_status = GenerationJob.STATE_DRAFTING
     job.error_message = ""
     job.drafting_started_on = timezone.now()
@@ -1633,86 +2580,25 @@ def generate_job_draft(job: GenerationJob) -> GenerationJob:
                     ]
                 )
                 return job
-        planning = None
-        if _test_gen_enabled():
-            try:
-                planning_prompt = _build_planning_prompt(job, crawl_summary)
-                planning = _call_ollama_json(
-                    prompt=planning_prompt,
-                    model=job.llm_model or _default_test_gen_model(),
-                    temperature=float(job.llm_temperature or 0.0),
-                    timeout_seconds=_llm_timeout(),
-                    num_predict=900,
-                )
-                planning = _normalize_planning_payload(planning)
-            except (URLError, ValueError, TimeoutError, json.JSONDecodeError) as exc:
-                planning = None
-                crawl_warnings = crawl_summary.get("warnings") or []
-                crawl_warnings.append(f"Planning LLM fallback: {str(exc)}")
-                crawl_summary["warnings"] = crawl_warnings
-        if planning and not isinstance(planning.get("scenarios"), list):
-            crawl_warnings = crawl_summary.get("warnings") or []
-            crawl_warnings.append("Planning output missing `scenarios` list. Using fallback scenarios.")
-            crawl_summary["warnings"] = crawl_warnings
-            planning = None
-        if planning and len(planning.get("scenarios") or []) == 0:
-            crawl_warnings = crawl_summary.get("warnings") or []
-            crawl_warnings.append("Planning output contained zero scenarios. Using fallback scenarios.")
-            crawl_summary["warnings"] = crawl_warnings
-            planning = None
-        if not planning:
-            planning = _fallback_scenarios(job, crawl_summary)
         
-        scenarios = _sanitize_scenarios(planning.get("scenarios") or [], job.max_scenarios)
-        codegen_json = None
-        llm_notes: List[str] = [str(n) for n in planning.get("notes") or []]
-        if _test_gen_enabled():
-            try: 
-                codegen_json = None
-                llm_notes.append("Using template-based artifact generation (LLM codegen skipped).")
-                # codegen_prompt = _build_codegen_prompt(job, planning, crawl_summary)
-                
-                # codegen_json = _call_ollama_json(
-                #     prompt=codegen_prompt,
-                #     model=job.llm_model or _default_test_gen_model(),
-                #     temperature=float(job.llm_temperature or 0.0),
-                #     timeout_seconds=_llm_timeout(),
-                #     num_predict=800,
-                # )
-                # print("llm code json",codegen_json)
-                # codegen_json = _normalize_codegen_payload(codegen_json)
-                # if _is_codegen_empty(codegen_json):
-                #     llm_notes.append("LLM returned empty codegen → using template fallback.")
-                #     codegen_json = {}
-                # print("normalized Codegen Json>>>>>>:",json.dumps(codegen_json,indent=4))
-                # if _is_codegen_empty(codegen_json):
-                #     llm_notes.append("Primary codegen returned empty artifacts. Retrying with compact prompt.")
-                #     retry_prompt = _build_codegen_retry_prompt(job, planning, crawl_summary)
-                #     codegen_retry_json = _call_ollama_json(
-                #         prompt=retry_prompt,
-                #         model=job.llm_model or _default_test_gen_model(),
-                #         temperature=float(job.llm_temperature or 0.0),
-                #         timeout_seconds=_llm_timeout(),
-                #         num_predict=1400,
-                #     )
-                #     codegen_json = _normalize_codegen_payload(codegen_retry_json)
-                #     print("Codegen Retry Json>>>>>>:",json.dumps(codegen_json,indent=4))
-                # llm_notes.append(
-                #     "Codegen payload stats: "
-                #     f"page_objects={len(codegen_json.get('page_objects') or [])}, "
-                #     f"specs={len(codegen_json.get('specs') or [])}"
-                # )
-            except (URLError, ValueError, TimeoutError, json.JSONDecodeError) as exc:
-                llm_notes.append(f"Codegen LLM fallback: {str(exc)}")
-                codegen_json = None
-
-        print("Codegen Json final>>>>>>:",json.dumps(codegen_json,indent=4))
-        artifacts, notes = _extract_codegen_artifacts(
+        planning, scenarios, planning_notes = _plan_scenarios(
             job,
-            codegen_json or {},
+            crawl_summary,
+            manual_scenarios=manual_scenarios,
+            use_existing_scenarios=False,
+            llm_first=False,
+        )
+        
+        llm_notes: List[str] = [str(n) for n in planning.get("notes") or []]
+        llm_notes.extend(planning_notes)
+        llm_notes.append("Template-only artifact generation enabled; LLM codegen is disabled.")
+
+        artifacts = _build_template_artifacts(
+            job,
             {"scenarios": scenarios},
             crawl_summary,
         )
+        notes: List[str] = []
         llm_notes.extend(notes)
         validated_artifacts, validation_summary = _validate_artifacts(artifacts)
         validated_artifacts, runtime_selector_summary = _runtime_validate_selectors(
@@ -1730,6 +2616,7 @@ def generate_job_draft(job: GenerationJob) -> GenerationJob:
             "runtime_selector_validation": runtime_selector_summary,
             "runtime_selector_checked_count": runtime_selector_summary.get("checked_selectors", 0),
             "runtime_selector_missing_count": runtime_selector_summary.get("missing_selectors", 0),
+            "strict_artifact_gate": _require_all_artifacts_valid(),
         }
 
         job.scenarios.all().delete()
@@ -1774,13 +2661,17 @@ def generate_job_draft(job: GenerationJob) -> GenerationJob:
         job.llm_notes = llm_notes[:100]
         job.validation_summary = validation_summary
         job.drafting_finished_on = timezone.now()
-        job.job_status = (
-            GenerationJob.STATE_DRAFT_READY
-            if validation_summary.get("valid_artifacts", 0) > 0
-            else GenerationJob.STATE_FAILED
-        )
-        if job.job_status == GenerationJob.STATE_FAILED:
-            job.error_message = "No valid artifacts were generated."
+        strict_gate = _require_all_artifacts_valid()
+        has_valid = validation_summary.get("valid_artifacts", 0) > 0
+        if strict_gate and invalid_artifacts > 0:
+            job.job_status = GenerationJob.STATE_FAILED
+            job.error_message = f"Artifact validation failed: {_invalid_artifact_summary(validated_artifacts)}"
+        else:
+            job.job_status = GenerationJob.STATE_DRAFT_READY if has_valid else GenerationJob.STATE_FAILED
+            if job.job_status == GenerationJob.STATE_FAILED:
+                job.error_message = "No valid artifacts were generated."
+            else:
+                job.error_message = ""
         job.save(
             update_fields=[
                 "crawl_summary",
@@ -1886,3 +2777,127 @@ def materialize_job(job: GenerationJob, *, allow_overwrite: bool = False) -> Mat
         conflicts=conflicts,
         errors=errors,
     )
+
+
+def regenerate_job_artifacts_with_llm(job: GenerationJob) -> Dict[str, Any]:
+    crawl_summary = _run_crawl_context(
+        base_url=job.base_url,
+        seed_urls=job.seed_urls or [],
+        max_routes=job.max_routes or _max_routes_default(),
+    )
+    if not (crawl_summary.get("routes") or []):
+        # Fallback to stored summary only if refresh could not load any route.
+        crawl_summary = job.crawl_summary or crawl_summary or {}
+    if not (crawl_summary.get("routes") or []):
+        warnings = crawl_summary.get("warnings") or []
+        warnings.append("No crawl routes available during LLM regeneration; selector validation will be low-confidence.")
+        crawl_summary["warnings"] = warnings
+
+    planning, scenarios, planning_notes = _plan_scenarios(
+        job,
+        crawl_summary,
+        use_existing_scenarios=True,
+        llm_first=True,
+    )
+    artifacts = _build_template_artifacts(
+        job,
+        {"scenarios": scenarios},
+        crawl_summary,
+    )
+    notes = ["Template-only artifact regeneration completed (LLM used for planning only)."]
+    validated_artifacts, validation_summary = _validate_artifacts(artifacts)
+    validated_artifacts, runtime_selector_summary = _runtime_validate_selectors(
+        validated_artifacts,
+        base_url=job.base_url,
+        crawl_summary=crawl_summary,
+    )
+
+    invalid_artifacts = sum(
+        1 for artifact in validated_artifacts if artifact.get("validation_status") != GeneratedArtifact.VALID
+    )
+    validation_summary = {
+        **validation_summary,
+        "invalid_artifacts": invalid_artifacts,
+        "valid_artifacts": len(validated_artifacts) - invalid_artifacts,
+        "runtime_selector_validation": runtime_selector_summary,
+        "runtime_selector_checked_count": runtime_selector_summary.get("checked_selectors", 0),
+        "runtime_selector_missing_count": runtime_selector_summary.get("missing_selectors", 0),
+        "strict_artifact_gate": _require_all_artifacts_valid(),
+        "regenerated_via_llm": True,
+        "regenerated_at": timezone.now().isoformat(),
+    }
+
+    job.scenarios.all().delete()
+    scenario_rows = []
+    for index, sc in enumerate(scenarios, start=1):
+        scenario_rows.append(
+            GenerationScenario(
+                job=job,
+                scenario_id=sc["id"],
+                title=sc["title"],
+                scenario_type=sc["type"],
+                priority=index,
+                preconditions=sc.get("preconditions") or [],
+                steps=sc.get("steps") or [],
+                expected_assertions=sc.get("assertions") or [],
+                selected_for_materialization=True,
+            )
+        )
+    GenerationScenario.objects.bulk_create(scenario_rows)
+
+    job.artifacts.all().delete()
+    artifact_rows = []
+    for art in validated_artifacts:
+        artifact_rows.append(
+            GeneratedArtifact(
+                job=job,
+                artifact_type=art["artifact_type"],
+                relative_path=art["relative_path"],
+                content_draft=art["content"],
+                content_final=art["content"],
+                checksum=art["checksum"],
+                validation_status=art["validation_status"],
+                validation_errors=art["validation_errors"],
+                warnings=art["warnings"],
+            )
+        )
+    GeneratedArtifact.objects.bulk_create(artifact_rows)
+
+    llm_notes = [str(n) for n in (job.llm_notes or [])]
+    llm_notes.append("Artifacts regenerated via admin LLM action.")
+    llm_notes.extend(planning_notes)
+    llm_notes.extend([str(n) for n in notes[:10]])
+    job.llm_notes = llm_notes[:100]
+    job.crawl_summary = crawl_summary
+    job.feature_summary = str(planning.get("feature_summary") or job.feature_summary or "")
+    job.validation_summary = validation_summary
+    strict_gate = _require_all_artifacts_valid()
+    has_valid = validation_summary.get("valid_artifacts", 0) > 0
+    if strict_gate and invalid_artifacts > 0:
+        job.job_status = GenerationJob.STATE_FAILED
+        job.error_message = f"Artifact validation failed: {_invalid_artifact_summary(validated_artifacts)}"
+    else:
+        job.job_status = GenerationJob.STATE_DRAFT_READY if has_valid else GenerationJob.STATE_FAILED
+        if job.job_status == GenerationJob.STATE_FAILED:
+            job.error_message = "No valid artifacts were generated via LLM regeneration."
+        else:
+            job.error_message = ""
+    job.save(
+        update_fields=[
+            "llm_notes",
+            "crawl_summary",
+            "feature_summary",
+            "validation_summary",
+            "job_status",
+            "error_message",
+            "last_modified",
+        ]
+    )
+
+    return {
+        "total_artifacts": len(validated_artifacts),
+        "valid_artifacts": validation_summary.get("valid_artifacts", 0),
+        "invalid_artifacts": validation_summary.get("invalid_artifacts", 0),
+        "runtime_selector_missing_count": validation_summary.get("runtime_selector_missing_count", 0),
+        "status": job.job_status,
+    }

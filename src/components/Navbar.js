@@ -26,6 +26,9 @@ function Navbar() {
                         <li className="nav-item">
                             <Link className="nav-link" to="/">Products</Link>
                         </li>
+                        <li className="nav-item">
+                            <Link className="nav-link" to="/contact">Contact Us</Link>
+                        </li>
                     </ul>
 
                     <div className="d-flex align-items-center gap-3">

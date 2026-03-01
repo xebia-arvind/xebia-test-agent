@@ -17,7 +17,10 @@ export async function sendToDjango(payload: any) {
         } catch {
             // Keep raw text when response is not JSON
         }
-
+        console.log("✔ Data sent to Django", {
+            status: response.status,
+            response: parsedBody,
+        });
         if (!response.ok) {
             throw new Error(
                 `Django API request failed: ${response.status} ${response.statusText} | body=${JSON.stringify(parsedBody)}`

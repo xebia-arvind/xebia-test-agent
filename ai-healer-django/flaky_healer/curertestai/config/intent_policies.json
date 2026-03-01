@@ -54,6 +54,25 @@
       "a\\["
     ]
   },
+  "coupon": {
+    "blocked_selector_patterns": [
+      "(/payment|pay now|checkout|cart-icon)",
+      "(add to cart)"
+    ],
+    "allowed_hint_patterns": [
+      "coupon",
+      "discount",
+      "promo",
+      "code",
+      "apply",
+      "enter code",
+      "have a coupon",
+      "voucher",
+      "redeem",
+      "button",
+      "input"
+    ]
+  },
   "generic": {
     "blocked_selector_patterns": [],
     "allowed_hint_patterns": []

@@ -1,4 +1,5 @@
 import os
+import hashlib
 
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -7,8 +8,9 @@ from rest_framework.views import APIView
 
 from test_analytics.models import TestRun
 
-from .models import GenerationJob, GenerationExecutionLink
+from .models import GenerationJob, GenerationExecutionLink, GeneratedArtifact
 from .serializers import (
+    GenerationJobArtifactUpdateSerializer,
     GenerationJobApproveSerializer,
     GenerationJobCreateSerializer,
     GenerationJobDetailSerializer,
@@ -17,6 +19,7 @@ from .serializers import (
     GenerationJobRejectSerializer,
 )
 from .generation_service import (
+    _validate_artifact_content,
     apply_approval_selection,
     generate_job_draft,
     materialize_job,
@@ -44,7 +47,11 @@ class GenerationJobCreateAPIView(APIView):
             job_status=GenerationJob.STATE_DRAFTING,
         )
 
-        job = generate_job_draft(job)
+        job = generate_job_draft(
+            job,
+            manual_scenarios=data.get("manual_scenarios") or [],
+        )
+        
         return Response(
             {
                 "job_id": str(job.job_id),
@@ -175,6 +182,79 @@ class GenerationJobLinkRunAPIView(APIView):
                 "job_id": str(job.job_id),
                 "run_id": test_run.run_id,
                 "link_id": link.id,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class GenerationJobArtifactUpdateAPIView(APIView):
+    def post(self, request, job_id):
+        job = get_object_or_404(GenerationJob, job_id=job_id)
+        serializer = GenerationJobArtifactUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        if job.job_status == GenerationJob.STATE_MATERIALIZED:
+            return Response(
+                {"error": "Cannot edit artifacts after materialization"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        relative_path = str(data["relative_path"] or "").strip()
+        artifact = get_object_or_404(GeneratedArtifact, job=job, relative_path=relative_path)
+        content = str(data["content"] or "")
+
+        errors, warnings = _validate_artifact_content(artifact.artifact_type, content)
+        is_valid = len(errors) == 0
+        checksum = hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+        artifact.content_final = content
+        if data.get("update_draft", True):
+            artifact.content_draft = content
+        artifact.validation_status = GeneratedArtifact.VALID if is_valid else GeneratedArtifact.INVALID
+        artifact.validation_errors = errors
+        artifact.warnings = warnings
+        artifact.checksum = checksum
+        artifact.save(
+            update_fields=[
+                "content_final",
+                "content_draft",
+                "validation_status",
+                "validation_errors",
+                "warnings",
+                "checksum",
+                "last_modified",
+            ]
+        )
+
+        all_artifacts = job.artifacts.all()
+        invalid_count = all_artifacts.filter(validation_status=GeneratedArtifact.INVALID).count()
+        total_count = all_artifacts.count()
+        valid_count = total_count - invalid_count
+        summary = dict(job.validation_summary or {})
+        summary.update(
+            {
+                "total_artifacts": total_count,
+                "valid_artifacts": valid_count,
+                "invalid_artifacts": invalid_count,
+                "manual_review_edited": True,
+            }
+        )
+        job.validation_summary = summary
+        job.save(update_fields=["validation_summary", "last_modified"])
+
+        return Response(
+            {
+                "status": "UPDATED",
+                "job_status": job.job_status,
+                "artifact": {
+                    "relative_path": artifact.relative_path,
+                    "validation_status": artifact.validation_status,
+                    "validation_errors": artifact.validation_errors,
+                    "warnings": artifact.warnings,
+                    "checksum": artifact.checksum,
+                },
+                "validation_summary": summary,
             },
             status=status.HTTP_200_OK,
         )

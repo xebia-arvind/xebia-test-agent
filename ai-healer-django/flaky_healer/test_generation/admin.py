@@ -132,6 +132,7 @@ class GeneratedArtifactAdmin(admin.ModelAdmin):
         "artifact_type",
         "relative_path",
         "validation_status",
+        "llm_generate_link",
         "checksum",
         "created_on",
     )
@@ -139,6 +140,44 @@ class GeneratedArtifactAdmin(admin.ModelAdmin):
     search_fields = ("relative_path", "job__feature_name")
     readonly_fields = ("checksum", "validation_errors", "warnings")
     ordering = ("-created_on",)
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom = [
+            path(
+                "<int:artifact_pk>/llm-generate/",
+                self.admin_site.admin_view(self.llm_generate),
+                name="test_generation_generatedartifact_llm_generate",
+            ),
+        ]
+        return custom + urls
+
+    def llm_generate_link(self, obj):
+        url = reverse("admin:test_generation_generatedartifact_llm_generate", args=[obj.id])
+        return format_html('<a href="{}">Generate via LLM</a>', url)
+
+    llm_generate_link.short_description = "LLM Patch"
+
+    def llm_generate(self, request, artifact_pk):
+        from .generation_service import regenerate_job_artifacts_with_llm
+
+        artifact = self.get_object(request, artifact_pk)
+        if not artifact:
+            return HttpResponseRedirect("../")
+        try:
+            summary = regenerate_job_artifacts_with_llm(artifact.job)
+            self.message_user(
+                request,
+                (
+                    f"LLM regeneration complete for job {artifact.job.job_id}. "
+                    f"valid={summary.get('valid_artifacts', 0)} "
+                    f"invalid={summary.get('invalid_artifacts', 0)} "
+                    f"status={summary.get('status')}"
+                ),
+            )
+        except Exception as exc:
+            self.message_user(request, f"LLM regeneration failed: {str(exc)}", level="error")
+        return HttpResponseRedirect(request.META.get("HTTP_REFERER", "../../"))
 
 
 @admin.register(GenerationExecutionLink)

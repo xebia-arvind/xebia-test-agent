@@ -32,11 +32,31 @@ type FailureContext = {
 
 const contextByTestId = new Map<string, FailureContext>();
 
+const UI_CHANGE_PRIORITY: Record<string, number> = {
+  UNKNOWN: 0,
+  UNCHANGED: 1,
+  MINOR_CHANGE: 2,
+  MAJOR_CHANGE: 3,
+  ELEMENT_REMOVED: 4,
+};
+
+function pickMostSevereUiChange(previous?: string, incoming?: string): string | undefined {
+  const prev = String(previous || "").toUpperCase();
+  const next = String(incoming || "").toUpperCase();
+  if (!prev && !next) return undefined;
+  if (!prev) return next || undefined;
+  if (!next) return prev || undefined;
+  const prevRank = UI_CHANGE_PRIORITY[prev] ?? 0;
+  const nextRank = UI_CHANGE_PRIORITY[next] ?? 0;
+  return nextRank >= prevRank ? next : prev;
+}
+
 export function setFailureContext(testInfo: TestInfo, context: FailureContext) {
   const previous = contextByTestId.get(testInfo.testId) || {};
   contextByTestId.set(testInfo.testId, {
     ...previous,
     ...context,
+    uiChangeLevel: pickMostSevereUiChange(previous.uiChangeLevel, context.uiChangeLevel),
     stepEvents: context.stepEvents ?? previous.stepEvents ?? [],
   });
 }
